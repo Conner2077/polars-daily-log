@@ -146,7 +146,7 @@ auto_daily_log/
 | summary | TEXT | LLM 生成的工作摘要 |
 | raw_activities | TEXT (JSON) | 关联的 activity ID 列表 |
 | raw_commits | TEXT (JSON) | 关联的 git_commit ID 列表 |
-| status | TEXT | pending_review / approved / submitted / rejected |
+| status | TEXT | pending_review / approved / auto_approved / submitted / rejected / auto_rejected |
 | user_edited | BOOLEAN | 用户是否手动修改过 |
 | jira_worklog_id | TEXT (nullable) | Jira 返回的 worklog ID |
 | created_at | TEXT | 创建时间 |
@@ -356,6 +356,7 @@ GET /rest/api/2/issue/{issueKey}?fields=summary,description
 - LLM 配置：引擎选择、API Key、端点地址、模型名称
 - Prompt 编辑器：支持变量高亮的文本编辑器
 - 定时任务：触发时间、开关
+- 自动审批：开关、超时时间、审批 Prompt 编辑器
 - 系统：服务端口、语言、数据保留策略
 
 ## 5. 审批流程
@@ -367,17 +368,24 @@ GET /rest/api/2/issue/{issueKey}?fields=summary,description
 LLM 生成草稿 → worklog_drafts (status: pending_review)
     │                          → audit_logs (action: created)
     ▼
-Web UI 显示待审批通知
+Web UI 显示待审批通知，启动自动审批倒计时
+    │
+    ├── 用户在超时前操作 ──┬── 编辑摘要/工时  → audit_logs (action: edited, before/after snapshot)
+    │                      ├── 通过           → status: approved, audit_logs (action: approved)
+    │                      ├── 驳回           → status: rejected, audit_logs (action: rejected)
+    │                      │                    可手动触发重新生成
+    │                      └── 一键全部通过   → 批量 approved
+    │
+    └── 超时无人操作（默认 30 分钟，可配置）
+        │
+        ▼
+      LLM 自动审批：调用 LLM 评估草稿质量
+        ├── 通过 → status: auto_approved, audit_logs (action: auto_approved, llm_review)
+        └── 不通过 → 保持 pending_review, audit_logs (action: auto_rejected, llm_review)
+                     等待用户手动处理
     │
     ▼
-用户操作 ─┬── 编辑摘要/工时  → audit_logs (action: edited, before/after snapshot)
-          ├── 通过           → status: approved, audit_logs (action: approved)
-          ├── 驳回           → status: rejected, audit_logs (action: rejected)
-          │                    可手动触发重新生成
-          └── 一键全部通过   → 批量 approved
-    │
-    ▼
-确认提交到 Jira
+确认提交到 Jira（approved 或 auto_approved）
     │
     ▼
 调用 Jira API 写入 worklog
@@ -385,6 +393,34 @@ Web UI 显示待审批通知
     ├── 成功 → status: submitted, 记录 jira_worklog_id
     │         → audit_logs (action: submitted, jira_response)
     └── 失败 → 保持 approved, 显示错误信息, 可重试
+```
+
+### 5.1 自动审批配置
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| auto_approve_enabled | true | 是否启用自动审批 |
+| auto_approve_timeout_min | 30 | 超时时间（分钟） |
+| auto_approve_prompt | (见下方) | LLM 审批 Prompt，可在 Web UI 编辑 |
+
+**自动审批 Prompt 模板（默认）：**
+
+```
+你是工作日志审批助手。请检查以下工作日志草稿：
+
+【日期】{date}
+【Jira 任务】{issue_key}: {issue_summary}
+【工时】{time_spent_hours} 小时
+【日志内容】{summary}
+【关联 Git Commits】{git_commits}
+
+请判断：
+1. 日志内容是否与 Git commits 和任务描述一致？
+2. 工时是否合理？
+3. 日志描述是否清晰、具体？
+
+如果合格返回 {"approved": true}
+如果不合格返回 {"approved": false, "reason": "不通过原因"}
 ```
 
 ## 6. 配置文件（config.yaml 初始模板）
@@ -432,6 +468,10 @@ llm:
 scheduler:
   enabled: true
   trigger_time: "18:00"
+
+auto_approve:
+  enabled: true
+  timeout_min: 30
 
 system:
   language: "zh"
