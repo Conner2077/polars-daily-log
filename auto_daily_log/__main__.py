@@ -1,6 +1,9 @@
 """Entry point: python -m auto_daily_log"""
 import argparse
-import sys
+import asyncio
+
+from .config import load_config
+from .app import Application
 
 
 def main():
@@ -8,7 +11,13 @@ def main():
     parser.add_argument("--config", default="config.yaml", help="Config file path")
     parser.add_argument("--port", type=int, help="Override server port")
     args = parser.parse_args()
-    print(f"Auto Daily Log v0.1.0 - config: {args.config}")
+
+    config = load_config(args.config)
+    if args.port:
+        config.server.port = args.port
+
+    app = Application(config)
+    asyncio.run(app.run())
 
 
 if __name__ == "__main__":
