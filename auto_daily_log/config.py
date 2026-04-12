@@ -80,7 +80,7 @@ class SystemConfig(BaseModel):
 class EmbeddingConfig(BaseModel):
     enabled: bool = True
     model: str = ""
-    dimensions: int = 1536
+    dimensions: int = 1024
 
 
 class AppConfig(BaseModel):

@@ -49,7 +49,7 @@ auto_approve:
 embedding:
   enabled: true
   model: ""
-  dimensions: 1536
+  dimensions: 1024
 
 system:
   language: "zh"

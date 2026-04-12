@@ -101,12 +101,27 @@ class Database:
         await self._conn.enable_load_extension(False)
         # Create standard tables
         await self._conn.executescript(_SCHEMA_SQL)
-        # Create vec0 virtual table (must be separate execute, not in executescript)
-        await self._conn.execute(
-            f"CREATE VIRTUAL TABLE IF NOT EXISTS embeddings USING vec0("
-            f"source_type TEXT, source_id INTEGER, text_content TEXT, "
-            f"embedding FLOAT[{self._embedding_dimensions}])"
-        )
+        # Create or recreate vec0 virtual table if dimension changed
+        try:
+            row = await self.fetch_one("SELECT embedding FROM embeddings LIMIT 0")
+            # Table exists — check if we need to recreate (dimension mismatch handled by dropping)
+        except Exception:
+            # Table doesn't exist, create it
+            pass
+        try:
+            await self._conn.execute(
+                f"CREATE VIRTUAL TABLE IF NOT EXISTS embeddings USING vec0("
+                f"source_type TEXT, source_id INTEGER, text_content TEXT, "
+                f"embedding FLOAT[{self._embedding_dimensions}])"
+            )
+        except Exception:
+            # Dimension mismatch — drop and recreate
+            await self._conn.execute("DROP TABLE IF EXISTS embeddings")
+            await self._conn.execute(
+                f"CREATE VIRTUAL TABLE embeddings USING vec0("
+                f"source_type TEXT, source_id INTEGER, text_content TEXT, "
+                f"embedding FLOAT[{self._embedding_dimensions}])"
+            )
         await self._conn.commit()
         # Migrate: add new columns if missing (for existing databases)
         await self._migrate()
