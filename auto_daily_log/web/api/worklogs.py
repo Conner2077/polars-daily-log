@@ -102,9 +102,42 @@ async def generate_summary(body: GenerateRequest, request: Request):
         return await _generate_period(db, request, tag, today, start, end)
 
 
+async def _get_llm_engine_from_settings(db):
+    """Build LLM engine from settings table (user may have configured via Web UI)."""
+    from ...config import LLMConfig, LLMProviderConfig
+    from ...summarizer.engine import get_llm_engine
+
+    engine_name = (await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_engine'") or {}).get("value", "kimi")
+    api_key = (await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_api_key'") or {}).get("value", "")
+    model = (await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_model'") or {}).get("value", "")
+    base_url = (await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_base_url'") or {}).get("value", "")
+
+    if not api_key:
+        return None
+
+    # Fill in defaults for empty model/base_url
+    defaults = {
+        "kimi": ("moonshot-v1-8k", "https://api.moonshot.cn/v1"),
+        "openai": ("gpt-4o", "https://api.openai.com/v1"),
+        "ollama": ("llama3", "http://localhost:11434"),
+        "claude": ("claude-sonnet-4-20250514", "https://api.anthropic.com"),
+    }
+    default_model, default_url = defaults.get(engine_name, ("", ""))
+    model = model or default_model
+    base_url = base_url or default_url
+
+    provider = LLMProviderConfig(api_key=api_key, model=model, base_url=base_url)
+    config = LLMConfig(engine=engine_name, **{engine_name: provider})
+    return get_llm_engine(config)
+
+
 async def _generate_daily(db, request, today, start, end):
     """Daily: use LLM Summarizer to generate per-issue worklog drafts. Falls back to raw data if LLM fails."""
-    llm_engine = getattr(request.app.state, "_llm_engine", None)
+    # Try to get LLM engine from settings table first (user-configured via Web UI)
+    llm_engine = await _get_llm_engine_from_settings(db)
+    # Fallback to app state engine (from config.yaml)
+    if not llm_engine:
+        llm_engine = getattr(request.app.state, "_llm_engine", None)
 
     if llm_engine:
         try:
@@ -123,13 +156,12 @@ async def _generate_daily(db, request, today, start, end):
                 )
 
             return {"ids": [d["id"] for d in drafts], "tag": "daily", "period_start": start, "period_end": end, "count": len(drafts)}
-        except Exception:
+        except Exception as e:
             # LLM failed, fall through to fallback
-            pass
+            print(f"[Generate] LLM failed: {e}")
 
-    # Fallback:
-        # Fallback: generate without LLM (raw data summary)
-        return await _generate_daily_fallback(db, today, start, end)
+    # Fallback: generate without LLM (raw data summary)
+    return await _generate_daily_fallback(db, today, start, end)
 
 
 async def _generate_daily_fallback(db, today, start, end):
@@ -195,8 +227,10 @@ async def _generate_period(db, request, tag, today, start, end):
         )
     daily_text = "\n\n".join(daily_text_parts)
 
-    # Try LLM
-    llm_engine = getattr(request.app.state, "_llm_engine", None)
+    # Try LLM (settings table first, then app state)
+    llm_engine = await _get_llm_engine_from_settings(db)
+    if not llm_engine:
+        llm_engine = getattr(request.app.state, "_llm_engine", None)
     if llm_engine:
         from ...summarizer.prompt import DEFAULT_PERIOD_SUMMARY_PROMPT, render_prompt
         period_type_label = {"weekly": "周报", "monthly": "月报", "custom": "阶段性总结"}[tag]
