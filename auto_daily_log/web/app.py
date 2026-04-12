@@ -11,4 +11,9 @@ def create_app(db: Database) -> FastAPI:
     app.include_router(worklogs.router, prefix="/api")
     app.include_router(dashboard.router, prefix="/api")
     app.include_router(git_repos.router, prefix="/api")
+    from fastapi.staticfiles import StaticFiles
+    from pathlib import Path
+    frontend_dist = Path(__file__).parent.parent.parent / "web" / "frontend" / "dist"
+    if frontend_dist.exists():
+        app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
     return app
