@@ -9,7 +9,7 @@ from auto_daily_log.models.database import Database
 
 @pytest_asyncio.fixture
 async def db(tmp_path):
-    database = Database(tmp_path / "test.db")
+    database = Database(tmp_path / "test.db", embedding_dimensions=4)
     await database.initialize()
     yield database
     await database.close()

@@ -15,7 +15,7 @@ from auto_daily_log.web.app import create_app
 
 @pytest_asyncio.fixture
 async def client(tmp_path):
-    db = Database(tmp_path / "e2e_test.db")
+    db = Database(tmp_path / "e2e_test.db", embedding_dimensions=4)
     await db.initialize()
     app = create_app(db)
     app.state.db = db

@@ -6,7 +6,7 @@ from auto_daily_log.models.database import Database
 
 @pytest_asyncio.fixture
 async def app_client(tmp_path):
-    db = Database(tmp_path / "test.db")
+    db = Database(tmp_path / "test.db", embedding_dimensions=4)
     await db.initialize()
     app = create_app(db)
     transport = ASGITransport(app=app)

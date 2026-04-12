@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import aiosqlite
+import sqlite_vec
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS activities (
@@ -83,14 +84,26 @@ CREATE TABLE IF NOT EXISTS settings (
 
 
 class Database:
-    def __init__(self, db_path: Path | str):
+    def __init__(self, db_path: Path | str, embedding_dimensions: int = 1536):
         self._db_path = str(db_path)
         self._conn: Optional[aiosqlite.Connection] = None
+        self._embedding_dimensions = embedding_dimensions
 
     async def initialize(self) -> None:
         self._conn = await aiosqlite.connect(self._db_path)
         self._conn.row_factory = aiosqlite.Row
+        # Load sqlite-vec extension
+        await self._conn.enable_load_extension(True)
+        await self._conn.load_extension(sqlite_vec.loadable_path())
+        await self._conn.enable_load_extension(False)
+        # Create standard tables
         await self._conn.executescript(_SCHEMA_SQL)
+        # Create vec0 virtual table (must be separate execute, not in executescript)
+        await self._conn.execute(
+            f"CREATE VIRTUAL TABLE IF NOT EXISTS embeddings USING vec0("
+            f"source_type TEXT, source_id INTEGER, text_content TEXT, "
+            f"embedding FLOAT[{self._embedding_dimensions}])"
+        )
         await self._conn.commit()
 
     async def close(self) -> None:
