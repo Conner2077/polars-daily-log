@@ -25,4 +25,9 @@ export default {
   getGitRepos: () => api.get('/git-repos'),
   addGitRepo: (data) => api.post('/git-repos', data),
   deleteGitRepo: (id) => api.delete(`/git-repos/${id}`),
+  search: (q, limit = 20, sourceType = null) => {
+    const params = { q, limit }
+    if (sourceType) params.source_type = sourceType
+    return api.get('/search', { params })
+  },
 }
