@@ -15,6 +15,10 @@
           <el-icon><Odometer /></el-icon>
           <span>Dashboard</span>
         </el-menu-item>
+        <el-menu-item index="/activities">
+          <el-icon><Monitor /></el-icon>
+          <span>Activities</span>
+        </el-menu-item>
         <el-menu-item index="/worklogs">
           <el-icon><Document /></el-icon>
           <span>Worklogs</span>

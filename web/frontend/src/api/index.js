@@ -5,6 +5,9 @@ const api = axios.create({ baseURL: '/api' })
 export default {
   getDashboard: (date) => api.get('/dashboard', { params: { target_date: date } }),
   getActivities: (date) => api.get('/activities', { params: { target_date: date } }),
+  getActivityDates: () => api.get('/activities/dates'),
+  deleteActivity: (id) => api.delete(`/activities/${id}`),
+  deleteActivitiesByDate: (date) => api.delete('/activities', { params: { target_date: date } }),
   getWorklogs: (date) => api.get('/worklogs', { params: { date } }),
   updateDraft: (id, data) => api.patch(`/worklogs/${id}`, data),
   approveDraft: (id) => api.post(`/worklogs/${id}/approve`),
