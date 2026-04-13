@@ -3,10 +3,11 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-# Clear proxy env vars to prevent httpx/urllib from using system proxy
-# Our API calls to Jira/LLM should go direct, not through local proxy
-for _proxy_var in ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
-    os.environ.pop(_proxy_var, None)
+# Clear proxy env vars BEFORE any httpx import to prevent proxy interference
+# Jira SSO, LLM API calls must go direct, not through local proxy (e.g. Clash)
+_PROXY_VARS = ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "no_proxy", "NO_PROXY")
+for _pv in _PROXY_VARS:
+    os.environ.pop(_pv, None)
 
 import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler

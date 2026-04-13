@@ -27,6 +27,11 @@ async def jira_sso_login(body: JiraLoginRequest, request: Request):
     """Auto-login to Jira via SSO, get cookie, save to settings."""
     db = request.app.state.db
 
+    # Force clear proxy env to prevent interference
+    import os
+    for pv in ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        os.environ.pop(pv, None)
+
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=False, trust_env=False) as client:
             # Step 1: Login to SSO

@@ -1,4 +1,9 @@
 """Entry point: python -m auto_daily_log"""
+import os
+# Clear proxy env vars FIRST — before any network library is imported
+for _pv in ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "no_proxy", "NO_PROXY"):
+    os.environ.pop(_pv, None)
+
 import argparse
 import asyncio
 
