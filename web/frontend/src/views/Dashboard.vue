@@ -12,54 +12,6 @@
       />
     </div>
 
-    <!-- Search Bar -->
-    <div class="search-section">
-      <div class="search-bar">
-        <el-input
-          v-model="searchQuery"
-          placeholder="Search activities, commits, worklogs..."
-          size="large"
-          @keyup.enter="doSearch"
-          clearable
-          @clear="searchResults = []"
-          class="search-input"
-        >
-          <template #prefix>
-            <el-icon :size="18" style="color: var(--text-tertiary)"><Search /></el-icon>
-          </template>
-        </el-input>
-        <el-select v-model="searchType" placeholder="All" style="width: 140px" clearable size="large">
-          <el-option label="All" value="" />
-          <el-option label="Activities" value="activity" />
-          <el-option label="Git Commits" value="git_commit" />
-          <el-option label="Worklogs" value="worklog" />
-        </el-select>
-        <el-button type="primary" @click="doSearch" :loading="searching" size="large" round>
-          Search
-        </el-button>
-      </div>
-
-      <!-- Search Results -->
-      <div v-if="searchResults.length > 0" class="search-results">
-        <el-table :data="searchResults" max-height="400">
-          <el-table-column label="Type" width="110">
-            <template #default="{ row }">
-              <el-tag size="small" :type="sourceTagType(row.source_type)">{{ row.source_type }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="text_content" label="Content" show-overflow-tooltip />
-          <el-table-column label="Relevance" width="100">
-            <template #default="{ row }">
-              <span class="relevance-score">{{ row.distance !== undefined ? (1 - row.distance).toFixed(2) : '-' }}</span>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
-      <div v-else-if="searchQuery && searched" class="search-empty">
-        No results found
-      </div>
-    </div>
-
     <!-- Stats Row -->
     <div class="stats-row">
       <div class="stat-card">
@@ -108,17 +60,10 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
 import api from '../api'
 
 const selectedDate = ref(new Date().toISOString().split('T')[0])
 const dashboard = ref({ pending_review_count: 0, submitted_hours: 0, activity_summary: [] })
-
-const searchQuery = ref('')
-const searchType = ref('')
-const searchResults = ref([])
-const searching = ref(false)
-const searched = ref(false)
 
 const totalActivityHours = computed(() => {
   const total = (dashboard.value.activity_summary || []).reduce((s, a) => s + a.total_sec, 0)
@@ -130,29 +75,9 @@ function getBarWidth(sec) {
   return (sec / max) * 100
 }
 
-function sourceTagType(type) {
-  return { activity: 'success', git_commit: 'warning', worklog: 'info' }[type] || ''
-}
-
 async function loadData() {
   const res = await api.getDashboard(selectedDate.value)
   dashboard.value = res.data
-}
-
-async function doSearch() {
-  if (!searchQuery.value.trim()) return
-  searching.value = true
-  searched.value = false
-  try {
-    const res = await api.search(searchQuery.value, 20, searchType.value || null)
-    searchResults.value = res.data
-  } catch (e) {
-    ElMessage.warning(e.response?.data?.detail || 'Search unavailable')
-    searchResults.value = []
-  } finally {
-    searching.value = false
-    searched.value = true
-  }
 }
 
 onMounted(loadData)
@@ -169,42 +94,6 @@ onMounted(loadData)
   justify-content: space-between;
   align-items: center;
   margin-bottom: 32px;
-}
-
-.search-section {
-  background: var(--surface);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 20px;
-  margin-bottom: 24px;
-}
-
-.search-bar {
-  display: flex;
-  gap: 10px;
-}
-
-.search-input {
-  flex: 1;
-}
-
-.search-results {
-  margin-top: 20px;
-  border-top: 1px solid var(--border);
-  padding-top: 16px;
-}
-
-.search-empty {
-  text-align: center;
-  padding: 24px;
-  color: var(--text-tertiary);
-  font-size: 14px;
-  margin-top: 16px;
-}
-
-.relevance-score {
-  font-variant-numeric: tabular-nums;
-  color: var(--text-secondary);
 }
 
 .stats-row {

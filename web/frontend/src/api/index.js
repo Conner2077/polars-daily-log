@@ -8,6 +8,7 @@ export default {
   getActivityDates: () => api.get('/activities/dates'),
   deleteActivity: (id) => api.delete(`/activities/${id}`),
   deleteActivitiesByDate: (date) => api.delete('/activities', { params: { target_date: date } }),
+  getScreenshotUrl: (path) => `/api/activities/screenshot?path=${encodeURIComponent(path)}`,
   getWorklogs: (date) => api.get('/worklogs', { params: { date } }),
   updateDraft: (id, data) => api.patch(`/worklogs/${id}`, data),
   approveDraft: (id) => api.post(`/worklogs/${id}/approve`),

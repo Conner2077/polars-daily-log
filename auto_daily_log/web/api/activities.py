@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Request, Query
+from fastapi.responses import FileResponse
 from datetime import date
+from pathlib import Path
 
 router = APIRouter(tags=["activities"])
 
@@ -37,3 +39,20 @@ async def delete_activities_by_date(request: Request, target_date: str = Query()
     db = request.app.state.db
     await db.execute("DELETE FROM activities WHERE date(timestamp) = ?", (target_date,))
     return {"status": "deleted"}
+
+
+@router.get("/activities/screenshot")
+async def get_screenshot(path: str = Query(...)):
+    """Serve a screenshot file by its absolute path."""
+    file = Path(path)
+    screenshot_dir = Path.home() / ".auto_daily_log" / "screenshots"
+    # Security: only serve files under screenshots dir
+    try:
+        file.resolve().relative_to(screenshot_dir.resolve())
+    except ValueError:
+        from fastapi import HTTPException
+        raise HTTPException(403, "Access denied")
+    if not file.exists():
+        from fastapi import HTTPException
+        raise HTTPException(404, "Screenshot not found")
+    return FileResponse(file, media_type="image/png")

@@ -4,6 +4,48 @@
       <h2>Activities</h2>
     </div>
 
+    <!-- Search Section -->
+    <div class="search-section">
+      <div class="search-bar">
+        <el-input
+          v-model="searchQuery"
+          placeholder="Search activities, commits, worklogs..."
+          size="large"
+          @keyup.enter="doSearch"
+          clearable
+          @clear="searchResults = []; searched = false"
+          class="search-input"
+        >
+          <template #prefix>
+            <el-icon :size="18" style="color: var(--text-tertiary)"><Search /></el-icon>
+          </template>
+        </el-input>
+        <el-select v-model="searchType" placeholder="All" style="width: 160px" clearable size="large">
+          <el-option label="All" value="" />
+          <el-option label="Activities" value="activity" />
+          <el-option label="Git Commits" value="git_commit" />
+          <el-option label="Worklogs" value="worklog" />
+        </el-select>
+        <el-button type="primary" @click="doSearch" :loading="searching" size="large" round>
+          Search
+        </el-button>
+      </div>
+
+      <!-- Search Results -->
+      <div v-if="searchResults.length > 0" class="search-results">
+        <div v-for="(item, i) in searchResults" :key="i" class="search-result-item">
+          <div class="search-result-left">
+            <el-tag size="small" :type="sourceTagType(item.source_type)">{{ item.source_type }}</el-tag>
+            <span class="search-result-text">{{ item.text_content }}</span>
+          </div>
+          <span class="relevance-score">{{ item.distance !== undefined ? (1 - item.distance).toFixed(2) : '-' }}</span>
+        </div>
+      </div>
+      <div v-else-if="searchQuery && searched" class="search-empty">
+        No results found
+      </div>
+    </div>
+
     <div class="activities-layout">
       <!-- Left: Date List -->
       <div class="dates-panel">
@@ -79,14 +121,17 @@
                   <span class="duration-cell">{{ formatDuration(row.duration_sec) }}</span>
                 </template>
               </el-table-column>
-              <el-table-column label="OCR" width="60">
+              <el-table-column label="Screenshot" width="90">
                 <template #default="{ row }">
-                  <el-button v-if="getOcrText(row)" size="small" text @click="showOcr(row)">
-                    <el-icon><View /></el-icon>
-                  </el-button>
+                  <img
+                    v-if="getScreenshotPath(row)"
+                    :src="screenshotUrl(getScreenshotPath(row))"
+                    style="width: 60px; height: 40px; object-fit: cover; border-radius: 4px; cursor: pointer;"
+                    @click="showPreview(row)"
+                  />
                 </template>
               </el-table-column>
-              <el-table-column label="" width="60">
+              <el-table-column label="" width="50">
                 <template #default="{ row }">
                   <el-popconfirm title="Delete?" @confirm="deleteOne(row.id)">
                     <template #reference>
@@ -117,9 +162,12 @@
                     </div>
                     <div class="timeline-card-right">
                       <span class="timeline-duration">{{ formatDuration(row.duration_sec) }}</span>
-                      <el-button v-if="getOcrText(row)" size="small" text @click="showOcr(row)">
-                        <el-icon><View /></el-icon>
-                      </el-button>
+                      <img
+                        v-if="getScreenshotPath(row)"
+                        :src="screenshotUrl(getScreenshotPath(row))"
+                        style="width: 60px; height: 40px; object-fit: cover; border-radius: 4px; cursor: pointer;"
+                        @click="showPreview(row)"
+                      />
                       <el-popconfirm title="Delete?" @confirm="deleteOne(row.id)">
                         <template #reference>
                           <el-button size="small" text type="danger">
@@ -147,9 +195,20 @@
       </div>
     </div>
 
-    <!-- OCR Dialog -->
-    <el-dialog v-model="ocrVisible" title="OCR Content" width="600px">
-      <pre class="ocr-content">{{ ocrContent }}</pre>
+    <!-- Screenshot Preview Dialog -->
+    <el-dialog v-model="previewVisible" title="Screenshot" width="800px" destroy-on-close>
+      <div class="preview-dialog-body">
+        <img
+          v-if="previewImage"
+          :src="screenshotUrl(previewImage)"
+          style="width: 100%; border-radius: 8px; display: block;"
+        />
+        <el-collapse v-if="previewOcrText" style="margin-top: 16px;">
+          <el-collapse-item title="OCR Text" name="ocr">
+            <pre class="ocr-content">{{ previewOcrText }}</pre>
+          </el-collapse-item>
+        </el-collapse>
+      </div>
     </el-dialog>
   </div>
 </template>
@@ -163,8 +222,18 @@ const dates = ref([])
 const selectedDate = ref(null)
 const activities = ref([])
 const viewMode = ref('table')
-const ocrVisible = ref(false)
-const ocrContent = ref('')
+
+// Search refs
+const searchQuery = ref('')
+const searchType = ref('')
+const searchResults = ref([])
+const searching = ref(false)
+const searched = ref(false)
+
+// Preview refs
+const previewVisible = ref(false)
+const previewImage = ref(null)
+const previewOcrText = ref('')
 
 const totalHours = computed(() => {
   const sec = activities.value.reduce((s, a) => s + (a.duration_sec || 0), 0)
@@ -229,9 +298,42 @@ function getOcrText(row) {
   } catch { return null }
 }
 
-function showOcr(row) {
-  ocrContent.value = getOcrText(row) || 'No OCR content'
-  ocrVisible.value = true
+function getScreenshotPath(row) {
+  if (!row.signals) return null
+  try {
+    const signals = typeof row.signals === 'string' ? JSON.parse(row.signals) : row.signals
+    return signals.screenshot_path || null
+  } catch { return null }
+}
+
+function screenshotUrl(path) {
+  return `/api/activities/screenshot?path=${encodeURIComponent(path)}`
+}
+
+function showPreview(row) {
+  previewImage.value = getScreenshotPath(row)
+  previewOcrText.value = getOcrText(row) || ''
+  previewVisible.value = true
+}
+
+function sourceTagType(type) {
+  return { activity: 'success', git_commit: 'warning', worklog: 'info' }[type] || ''
+}
+
+async function doSearch() {
+  if (!searchQuery.value.trim()) return
+  searching.value = true
+  searched.value = false
+  try {
+    const res = await api.search(searchQuery.value, 20, searchType.value || null)
+    searchResults.value = res.data
+  } catch (e) {
+    ElMessage.warning(e.response?.data?.detail || 'Search unavailable')
+    searchResults.value = []
+  } finally {
+    searching.value = false
+    searched.value = true
+  }
 }
 
 onMounted(loadDates)
@@ -245,6 +347,72 @@ onMounted(loadDates)
 
 .page-header {
   margin-bottom: 24px;
+}
+
+.search-section {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+  margin-bottom: 24px;
+}
+
+.search-bar {
+  display: flex;
+  gap: 10px;
+}
+
+.search-input {
+  flex: 1;
+}
+
+.search-results {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.search-result-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.search-result-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.search-result-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-empty {
+  text-align: center;
+  padding: 24px;
+  color: var(--text-tertiary);
+  font-size: 14px;
+  margin-top: 16px;
+}
+
+.relevance-score {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  font-size: 13px;
+  flex-shrink: 0;
 }
 
 .activities-layout {
@@ -460,10 +628,14 @@ onMounted(loadDates)
   margin-top: 12px;
 }
 
+.preview-dialog-body {
+  padding: 4px 0;
+}
+
 .ocr-content {
   white-space: pre-wrap;
   font-size: 13px;
-  max-height: 400px;
+  max-height: 300px;
   overflow: auto;
   background: var(--bg);
   padding: 16px;
