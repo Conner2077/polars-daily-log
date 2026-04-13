@@ -28,7 +28,7 @@ async def jira_sso_login(body: JiraLoginRequest, request: Request):
     db = request.app.state.db
 
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=False, trust_env=False) as client:
             # Step 1: Login to SSO
             resp = await client.post(
                 "https://fanruanclub.com/login/verify",
@@ -50,7 +50,7 @@ async def jira_sso_login(body: JiraLoginRequest, request: Request):
             redirect_url = data["data"]["redirectUrl"]
 
         # Step 2: Follow all redirects to Jira to collect session cookies
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as jira_client:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False, trust_env=False) as jira_client:
             jira_cookies = {}
             url = redirect_url
             for _ in range(5):
@@ -66,13 +66,14 @@ async def jira_sso_login(body: JiraLoginRequest, request: Request):
         cookie_str = "; ".join(f"{k}={v}" for k, v in jira_cookies.items())
 
         # Step 3: Verify cookie works
-        async with httpx.AsyncClient(timeout=10.0) as verify_client:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as verify_client:
             resp4 = await verify_client.get(
                 f"{body.jira_url.rstrip('/')}/rest/api/2/myself",
                 headers={"Cookie": cookie_str},
             )
             if resp4.status_code != 200:
-                return {"success": False, "message": "SSO login succeeded but Jira cookie verification failed"}
+                print(f"[Jira Login] Verify failed: {resp4.status_code} cookies={list(jira_cookies.keys())} cookie_len={len(cookie_str)}")
+                return {"success": False, "message": f"Jira cookie verification failed ({resp4.status_code}). Cookies: {list(jira_cookies.keys())}"}
             user = resp4.json()
 
         # Step 4: Save to settings
