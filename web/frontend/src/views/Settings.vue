@@ -78,18 +78,35 @@
           </el-form-item>
           <el-form-item label="认证方式">
             <el-select v-model="settings.jira_auth_mode" style="width: 100%">
-              <el-option label="Cookie（SSO 登录）" value="cookie" />
+              <el-option label="SSO 自动登录（推荐）" value="cookie" />
               <el-option label="Bearer Token（PAT）" value="bearer" />
             </el-select>
           </el-form-item>
           <el-form-item v-if="settings.jira_auth_mode === 'bearer'" label="Personal Access Token">
             <el-input v-model="settings.jira_pat" type="password" show-password />
           </el-form-item>
-          <el-form-item v-if="settings.jira_auth_mode === 'cookie'" label="Cookie">
-            <el-input v-model="settings.jira_cookie" type="textarea" :rows="3" placeholder="从浏览器开发者工具复制 Cookie（F12 → Network → 请求 Headers → Cookie）" />
-            <p style="font-size: 12px; color: var(--text-tertiary, #aeaeb2); margin-top: 4px">
-              SSO 登录后，从浏览器请求头中复制完整的 Cookie 值。包含 JSESSIONID 和 seraph.rememberme.cookie。
-            </p>
+        </el-form>
+      </div>
+
+      <div v-if="settings.jira_auth_mode === 'cookie'" class="settings-card" style="margin-top: 16px">
+        <h4 class="card-title">SSO 登录</h4>
+        <p style="font-size: 13px; color: var(--text-secondary, #86868b); margin-bottom: 16px">
+          输入帆软账号自动登录 Jira，获取并保存 Cookie。Cookie 过期后重新登录即可。
+        </p>
+        <el-form label-position="top" class="settings-form">
+          <el-form-item label="手机号">
+            <el-input v-model="jiraLogin.mobile" placeholder="18800000000" />
+          </el-form-item>
+          <el-form-item label="密码">
+            <el-input v-model="jiraLogin.password" type="password" show-password placeholder="帆软账号密码" />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" round :loading="jiraLogging" @click="doJiraLogin">
+              {{ jiraLogging ? '登录中...' : '登录并获取 Cookie' }}
+            </el-button>
+            <span v-if="jiraLoginResult" :style="{ marginLeft: '12px', fontSize: '13px', color: jiraLoginResult.success ? 'var(--success, #34c759)' : 'var(--danger, #ff3b30)' }">
+              {{ jiraLoginResult.success ? '&#10003;' : '&#10007;' }} {{ jiraLoginResult.message }}
+            </span>
           </el-form-item>
         </el-form>
       </div>
@@ -221,6 +238,9 @@ const tabs = [
 
 const checkingKey = ref(false)
 const keyCheckResult = ref(null)
+const jiraLogin = ref({ mobile: '', password: '' })
+const jiraLogging = ref(false)
+const jiraLoginResult = ref(null)
 
 const settings = ref({
   monitor_interval_sec: 30, monitor_ocr_enabled: true, monitor_ocr_engine: 'auto',
@@ -266,6 +286,31 @@ async function addRepo() {
 async function removeRepo(id) {
   await api.deleteGitRepo(id)
   await loadGitRepos()
+}
+
+async function doJiraLogin() {
+  if (!jiraLogin.value.mobile || !jiraLogin.value.password) {
+    jiraLoginResult.value = { success: false, message: '请输入手机号和密码' }
+    return
+  }
+  jiraLogging.value = true
+  jiraLoginResult.value = null
+  try {
+    const res = await api.jiraLogin(
+      jiraLogin.value.mobile,
+      jiraLogin.value.password,
+      settings.value.jira_server_url || 'https://work.fineres.com/'
+    )
+    jiraLoginResult.value = res.data
+    if (res.data.success) {
+      jiraLogin.value.password = ''
+      await loadSettings()
+    }
+  } catch (e) {
+    jiraLoginResult.value = { success: false, message: e.response?.data?.detail || 'Login failed' }
+  } finally {
+    jiraLogging.value = false
+  }
 }
 
 async function checkLLMKey() {

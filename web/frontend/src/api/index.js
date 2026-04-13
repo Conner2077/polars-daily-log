@@ -26,6 +26,8 @@ export default {
   putSetting: (key, value) => api.put(`/settings/${key}`, { value }),
   checkLLMKey: (engine, apiKey, model = '', baseUrl = '') =>
     api.post('/settings/check-llm', { engine, api_key: apiKey, model, base_url: baseUrl }),
+  jiraLogin: (mobile, password, jiraUrl) =>
+    api.post('/settings/jira-login', { mobile, password, jira_url: jiraUrl }),
   getGitRepos: () => api.get('/git-repos'),
   addGitRepo: (data) => api.post('/git-repos', data),
   deleteGitRepo: (id) => api.delete(`/git-repos/${id}`),

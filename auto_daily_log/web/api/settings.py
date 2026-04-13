@@ -16,6 +16,82 @@ class LLMCheckRequest(BaseModel):
     base_url: Optional[str] = ""
 
 
+class JiraLoginRequest(BaseModel):
+    mobile: str
+    password: str
+    jira_url: str = "https://work.fineres.com/"
+
+
+@router.post("/settings/jira-login")
+async def jira_sso_login(body: JiraLoginRequest, request: Request):
+    """Auto-login to Jira via SSO, get cookie, save to settings."""
+    db = request.app.state.db
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+            # Step 1: Login to SSO
+            resp = await client.post(
+                "https://fanruanclub.com/login/verify",
+                data={
+                    "mobile": body.mobile,
+                    "password": body.password,
+                    "referrer": body.jira_url,
+                    "app": "", "openid": "", "lang": "en",
+                },
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+            )
+            data = resp.json()
+            if not data.get("success"):
+                return {"success": False, "message": f"SSO login failed: {data.get('msg', 'Unknown error')}"}
+
+            redirect_url = data["data"]["redirectUrl"]
+
+        # Step 2: Follow redirect to Jira to get session cookies
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as jira_client:
+            resp2 = await jira_client.get(redirect_url)
+            jira_cookies = dict(resp2.cookies)
+            if resp2.status_code in (301, 302):
+                loc = resp2.headers.get("location", "")
+                if loc:
+                    resp3 = await jira_client.get(loc)
+                    jira_cookies.update(dict(resp3.cookies))
+
+        cookie_str = "; ".join(f"{k}={v}" for k, v in jira_cookies.items())
+
+        # Step 3: Verify cookie works
+        async with httpx.AsyncClient(timeout=10.0) as verify_client:
+            resp4 = await verify_client.get(
+                f"{body.jira_url.rstrip('/')}/rest/api/2/myself",
+                headers={"Cookie": cookie_str},
+            )
+            if resp4.status_code != 200:
+                return {"success": False, "message": "SSO login succeeded but Jira cookie verification failed"}
+            user = resp4.json()
+
+        # Step 4: Save to settings
+        for key, value in [
+            ("jira_server_url", body.jira_url.rstrip("/")),
+            ("jira_auth_mode", "cookie"),
+            ("jira_cookie", cookie_str),
+        ]:
+            existing = await db.fetch_one("SELECT key FROM settings WHERE key = ?", (key,))
+            if existing:
+                await db.execute("UPDATE settings SET value = ?, updated_at = datetime('now') WHERE key = ?", (value, key))
+            else:
+                await db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, value))
+
+        return {
+            "success": True,
+            "message": f"Login success: {user.get('displayName', user.get('name'))} ({user.get('emailAddress', '')})",
+            "username": user.get("name"),
+        }
+    except Exception as e:
+        return {"success": False, "message": f"Error: {str(e)}"}
+
+
 @router.post("/settings/check-llm")
 async def check_llm_key(body: LLMCheckRequest):
     """Validate LLM API key by making a minimal test call."""
