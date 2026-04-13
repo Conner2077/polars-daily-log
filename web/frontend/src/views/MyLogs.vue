@@ -90,6 +90,10 @@
 
       <div v-if="editingId === draft.id" class="log-edit">
         <div style="margin-bottom: 12px">
+          <label style="font-size: 13px; color: var(--text-secondary, #86868b); margin-bottom: 4px; display: block">Jira Issue Key</label>
+          <el-input v-model="editForm.issue_key" placeholder="e.g. PLS-4387" />
+        </div>
+        <div style="margin-bottom: 12px">
           <label style="font-size: 13px; color: var(--text-secondary, #86868b); margin-bottom: 4px; display: block">工时 (小时)</label>
           <el-input-number v-model="editForm.hours" :min="0" :step="0.5" :precision="1" />
         </div>
@@ -244,11 +248,13 @@ async function generateCustom() {
 
 function startEdit(draft) {
   editingId.value = draft.id
-  editForm.value = { hours: draft.time_spent_sec / 3600, summary: draft.summary }
+  editForm.value = { issue_key: draft.issue_key, hours: draft.time_spent_sec / 3600, summary: draft.summary }
 }
 
 async function saveEdit(id) {
-  await api.updateDraft(id, { time_spent_sec: Math.round(editForm.value.hours * 3600), summary: editForm.value.summary })
+  const data = { time_spent_sec: Math.round(editForm.value.hours * 3600), summary: editForm.value.summary }
+  if (editForm.value.issue_key) data.issue_key = editForm.value.issue_key
+  await api.updateDraft(id, data)
   editingId.value = null
   ElMessage.success('已更新')
   await loadDrafts()
