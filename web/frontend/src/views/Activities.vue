@@ -9,7 +9,7 @@
       <div class="search-bar">
         <el-input
           v-model="searchQuery"
-          placeholder="Search activities, commits, worklogs..."
+          placeholder="搜索日志和提交记录..."
           size="large"
           @keyup.enter="doSearch"
           clearable
@@ -20,14 +20,13 @@
             <el-icon :size="18" style="color: var(--text-tertiary)"><Search /></el-icon>
           </template>
         </el-input>
-        <el-select v-model="searchType" placeholder="All" style="width: 160px" clearable size="large">
-          <el-option label="All" value="" />
-          <el-option label="Activities" value="activity" />
-          <el-option label="Git Commits" value="git_commit" />
-          <el-option label="Worklogs" value="worklog" />
+        <el-select v-model="searchType" placeholder="全部" style="width: 160px" clearable size="large">
+          <el-option label="全部" value="" />
+          <el-option label="工作日志" value="worklog" />
+          <el-option label="Git 提交" value="git_commit" />
         </el-select>
         <el-button type="primary" @click="doSearch" :loading="searching" size="large" round>
-          Search
+          搜索
         </el-button>
       </div>
 
@@ -35,14 +34,16 @@
       <div v-if="searchResults.length > 0" class="search-results">
         <div v-for="(item, i) in searchResults" :key="i" class="search-result-item">
           <div class="search-result-left">
-            <el-tag size="small" :type="sourceTagType(item.source_type)">{{ item.source_type }}</el-tag>
+            <el-tag size="small" :type="sourceTagType(item.source_type)">
+              {{ item.source_type === 'worklog' ? '日志' : 'Git' }}
+            </el-tag>
             <span class="search-result-text">{{ item.text_content }}</span>
           </div>
           <span class="relevance-score">{{ item.distance !== undefined ? (1 - item.distance).toFixed(2) : '-' }}</span>
         </div>
       </div>
       <div v-else-if="searchQuery && searched" class="search-empty">
-        No results found
+        未找到相关内容
       </div>
     </div>
 

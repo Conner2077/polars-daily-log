@@ -47,12 +47,12 @@ class Application:
             workflow = DailyWorkflow(self.db, engine, self.config.auto_approve)
             await workflow.run_daily_summary()
 
-            # Index today's data for search
+            # Index today's worklogs + commits for search
             emb_engine = get_embedding_engine(self.config.llm, self.config.embedding)
             if emb_engine:
                 indexer = Indexer(self.db, emb_engine)
                 today = datetime.now().strftime("%Y-%m-%d")
-                await indexer.index_activities(today)
+                await indexer.index_worklogs(today)
                 await indexer.index_commits(today)
 
         self.scheduler.add_job(

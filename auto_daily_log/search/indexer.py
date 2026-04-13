@@ -8,35 +8,45 @@ class Indexer:
         self._db = db
         self._engine = engine
 
-    async def index_activities(self, target_date: str) -> int:
-        activities = await self._db.fetch_all(
-            "SELECT * FROM activities WHERE date(timestamp) = ? AND category != 'idle'",
-            (target_date,),
-        )
+    async def index_worklogs(self, target_date: str = None) -> int:
+        """Index worklog drafts (daily/weekly/monthly summaries) — the most searchable content."""
+        if target_date:
+            drafts = await self._db.fetch_all(
+                "SELECT * FROM worklog_drafts WHERE date = ? AND summary IS NOT NULL AND summary != ''",
+                (target_date,),
+            )
+        else:
+            drafts = await self._db.fetch_all(
+                "SELECT * FROM worklog_drafts WHERE summary IS NOT NULL AND summary != ''"
+            )
         count = 0
-        for a in activities:
+        for d in drafts:
             existing = await self._db.fetch_one(
-                "SELECT rowid FROM embeddings WHERE source_type = 'activity' AND source_id = ?",
-                (a["id"],),
+                "SELECT rowid FROM embeddings WHERE source_type = 'worklog' AND source_id = ?",
+                (d["id"],),
             )
             if existing:
                 continue
-            text = self._activity_to_text(a)
-            if not text.strip():
-                continue
+            tag = d.get("tag", "daily")
+            period = f"{d.get('period_start', d['date'])} ~ {d.get('period_end', d['date'])}"
+            text = f"[{tag}] {d.get('issue_key', '')} ({period})\n{d['summary']}"
             vec = await self._engine.embed(text)
             await self._db.execute(
                 "INSERT INTO embeddings (source_type, source_id, text_content, embedding) "
                 "VALUES (?, ?, ?, ?)",
-                ("activity", a["id"], text, json.dumps(vec)),
+                ("worklog", d["id"], text, json.dumps(vec)),
             )
             count += 1
         return count
 
-    async def index_commits(self, target_date: str) -> int:
-        commits = await self._db.fetch_all(
-            "SELECT * FROM git_commits WHERE date = ?", (target_date,)
-        )
+    async def index_commits(self, target_date: str = None) -> int:
+        """Index git commits — clear semantic content."""
+        if target_date:
+            commits = await self._db.fetch_all(
+                "SELECT * FROM git_commits WHERE date = ?", (target_date,)
+            )
+        else:
+            commits = await self._db.fetch_all("SELECT * FROM git_commits")
         count = 0
         for c in commits:
             existing = await self._db.fetch_one(
@@ -45,7 +55,7 @@ class Indexer:
             )
             if existing:
                 continue
-            text = f"{c['message']} {c.get('files_changed', '')}"
+            text = f"{c['message']} ({c.get('files_changed', '')})"
             vec = await self._engine.embed(text)
             await self._db.execute(
                 "INSERT INTO embeddings (source_type, source_id, text_content, embedding) "
@@ -55,33 +65,10 @@ class Indexer:
             count += 1
         return count
 
-    async def index_worklog(self, draft_id: int) -> None:
-        draft = await self._db.fetch_one(
-            "SELECT * FROM worklog_drafts WHERE id = ?", (draft_id,)
-        )
-        if not draft:
-            return
-        text = f"{draft['issue_key']} {draft['summary']}"
-        vec = await self._engine.embed(text)
-        await self._db.execute(
-            "INSERT INTO embeddings (source_type, source_id, text_content, embedding) "
-            "VALUES (?, ?, ?, ?)",
-            ("worklog", draft_id, text, json.dumps(vec)),
-        )
-
-    def _activity_to_text(self, activity: dict) -> str:
-        parts = []
-        if activity.get("app_name"):
-            parts.append(activity["app_name"])
-        if activity.get("window_title"):
-            parts.append(activity["window_title"])
-        if activity.get("url"):
-            parts.append(activity["url"])
-        if activity.get("signals"):
-            try:
-                signals = json.loads(activity["signals"])
-                if signals.get("ocr_text"):
-                    parts.append(signals["ocr_text"][:500])
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return " ".join(parts)
+    async def reindex_all(self) -> dict:
+        """Rebuild entire search index from worklogs + commits."""
+        # Clear existing
+        await self._db.execute("DELETE FROM embeddings WHERE source_type IN ('worklog', 'git_commit')")
+        wl = await self.index_worklogs()
+        gc = await self.index_commits()
+        return {"worklogs": wl, "git_commits": gc}
