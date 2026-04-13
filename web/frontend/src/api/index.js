@@ -18,6 +18,7 @@ export default {
   getAuditTrail: (id) => api.get(`/worklogs/${id}/audit`),
   getIssues: () => api.get('/issues'),
   addIssue: (data) => api.post('/issues', data),
+  fetchJiraIssue: (key) => api.get(`/issues/fetch/${key}`),
   updateIssue: (key, data) => api.patch(`/issues/${key}`, data),
   deleteIssue: (key) => api.delete(`/issues/${key}`),
   getSettings: () => api.get('/settings'),

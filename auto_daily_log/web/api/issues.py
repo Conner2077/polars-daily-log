@@ -20,6 +20,38 @@ async def list_issues(request: Request):
     rows = await db.fetch_all("SELECT * FROM jira_issues ORDER BY created_at DESC")
     return [{**r, "is_active": bool(r["is_active"])} for r in rows]
 
+@router.get("/issues/fetch/{issue_key}")
+async def fetch_jira_issue(issue_key: str, request: Request):
+    """Fetch issue summary and description from Jira API."""
+    import subprocess, json as _json, os
+    db = request.app.state.db
+
+    jira_url = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_server_url'") or {}).get("value", "")
+    jira_cookie = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_cookie'") or {}).get("value", "")
+
+    if not jira_url or not jira_cookie:
+        raise HTTPException(400, "Jira not configured or not logged in")
+
+    clean_env = {**os.environ, "http_proxy": "", "https_proxy": "", "all_proxy": "", "HTTP_PROXY": "", "HTTPS_PROXY": "", "ALL_PROXY": ""}
+    try:
+        result = subprocess.run([
+            "curl", "-s", "--noproxy", "*",
+            "-b", jira_cookie,
+            f"{jira_url}/rest/api/2/issue/{issue_key}?fields=summary,description"
+        ], capture_output=True, text=True, timeout=10, env=clean_env)
+        data = _json.loads(result.stdout)
+        if "fields" in data:
+            return {
+                "key": data.get("key", issue_key),
+                "summary": data["fields"].get("summary", ""),
+                "description": data["fields"].get("description", "") or "",
+            }
+        else:
+            raise HTTPException(404, f"Issue {issue_key} not found in Jira")
+    except _json.JSONDecodeError:
+        raise HTTPException(502, "Invalid response from Jira API")
+
+
 @router.post("/issues", status_code=201)
 async def add_issue(body: IssueCreate, request: Request):
     db = request.app.state.db

@@ -42,17 +42,22 @@
     <el-dialog v-model="dialogVisible" title="Add Jira Issue" width="500px">
       <el-form :model="newIssue" label-position="top" class="add-form">
         <el-form-item label="Issue Key" required>
-          <el-input v-model="newIssue.issue_key" placeholder="e.g. PROJ-101" />
+          <div style="display: flex; gap: 8px">
+            <el-input v-model="newIssue.issue_key" placeholder="e.g. PLS-4387" @blur="fetchIssueInfo" />
+            <el-button round :loading="fetching" @click="fetchIssueInfo" :disabled="!newIssue.issue_key">
+              {{ fetching ? '获取中...' : '自动获取' }}
+            </el-button>
+          </div>
         </el-form-item>
         <el-form-item label="Summary">
-          <el-input v-model="newIssue.summary" placeholder="Issue title" />
+          <el-input v-model="newIssue.summary" placeholder="自动获取或手动输入" />
         </el-form-item>
         <el-form-item label="Description">
           <el-input
             v-model="newIssue.description"
             type="textarea"
             :rows="3"
-            placeholder="Issue description (helps LLM match activities)"
+            placeholder="自动获取或手动输入（帮助 LLM 匹配活动到此任务）"
           />
         </el-form-item>
       </el-form>
@@ -72,8 +77,26 @@ import api from '../api'
 const issues = ref([])
 const dialogVisible = ref(false)
 const newIssue = ref({ issue_key: '', summary: '', description: '' })
+const fetching = ref(false)
 
 async function loadIssues() { const res = await api.getIssues(); issues.value = res.data }
+
+async function fetchIssueInfo() {
+  const key = newIssue.value.issue_key.trim().toUpperCase()
+  if (!key) return
+  newIssue.value.issue_key = key
+  fetching.value = true
+  try {
+    const res = await api.fetchJiraIssue(key)
+    newIssue.value.summary = res.data.summary || ''
+    newIssue.value.description = res.data.description || ''
+    ElMessage.success(`已获取: ${res.data.summary}`)
+  } catch (e) {
+    ElMessage.warning(e.response?.data?.detail || '无法从 Jira 获取任务信息，请手动填写')
+  } finally {
+    fetching.value = false
+  }
+}
 
 async function addIssue() {
   if (!newIssue.value.issue_key) { ElMessage.warning('Issue key is required'); return }
