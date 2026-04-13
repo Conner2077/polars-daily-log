@@ -75,16 +75,21 @@ async def jira_sso_login(body: JiraLoginRequest, request: Request):
                     if k in ("JSESSIONID", "seraph.rememberme.cookie", "atlassian.xsrf.token")}
         cookie_str = "; ".join(f"{k}={v}" for k, v in relevant.items())
 
-        # Step 3: Verify cookie works
-        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as verify_client:
-            resp4 = await verify_client.get(
-                f"{body.jira_url.rstrip('/')}/rest/api/2/myself",
-                headers={"Cookie": cookie_str},
-            )
-            if resp4.status_code != 200:
-                print(f"[Jira Login] Verify failed: {resp4.status_code} cookies={list(jira_cookies.keys())} cookie_len={len(cookie_str)}")
-                return {"success": False, "message": f"Jira cookie verification failed ({resp4.status_code}). Cookies: {list(jira_cookies.keys())}"}
-            user = resp4.json()
+        if not relevant.get("JSESSIONID"):
+            return {"success": False, "message": f"SSO login succeeded but no Jira JSESSIONID received. Got: {list(jira_cookies.keys())}"}
+
+        # Step 3: Try to verify (non-blocking — save cookie even if verify fails due to proxy)
+        user = None
+        try:
+            async with httpx.AsyncClient(timeout=10.0, trust_env=False) as verify_client:
+                resp4 = await verify_client.get(
+                    f"{body.jira_url.rstrip('/')}/rest/api/2/myself",
+                    headers={"Cookie": cookie_str},
+                )
+                if resp4.status_code == 200:
+                    user = resp4.json()
+        except Exception:
+            pass
 
         # Step 4: Save to settings
         for key, value in [
@@ -98,10 +103,14 @@ async def jira_sso_login(body: JiraLoginRequest, request: Request):
             else:
                 await db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, value))
 
+        if user:
+            msg = f"Login success: {user.get('displayName', user.get('name'))} ({user.get('emailAddress', '')})"
+        else:
+            msg = f"SSO login success, Cookie saved ({len(relevant)} cookies). Verification skipped."
         return {
             "success": True,
-            "message": f"Login success: {user.get('displayName', user.get('name'))} ({user.get('emailAddress', '')})",
-            "username": user.get("name"),
+            "message": msg,
+            "username": user.get("name") if user else None,
         }
     except Exception as e:
         return {"success": False, "message": f"Error: {str(e)}"}
