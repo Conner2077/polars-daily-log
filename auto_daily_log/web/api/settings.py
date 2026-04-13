@@ -50,19 +50,21 @@ async def jira_sso_login(body: JiraLoginRequest, request: Request):
             redirect_url = data["data"]["redirectUrl"]
 
         # Step 2: Follow all redirects to Jira to collect session cookies
-        # Use cookies=None to prevent auto cookie jar — manually track via headers
+        # Parse Set-Cookie headers directly to avoid httpx domain filtering
+        import re
         jira_cookies = {}
         url = redirect_url
         for _ in range(5):
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=False, trust_env=False) as hop_client:
-                # Send accumulated cookies as header
                 headers = {}
                 if jira_cookies:
                     headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in jira_cookies.items())
                 resp2 = await hop_client.get(url, headers=headers)
-                # Collect Set-Cookie from response
-                for name, value in resp2.cookies.items():
-                    jira_cookies[name] = value
+                # Parse Set-Cookie headers directly (bypasses httpx domain filtering)
+                for sc in resp2.headers.get_list("set-cookie"):
+                    match = re.match(r"([^=]+)=([^;]*)", sc)
+                    if match:
+                        jira_cookies[match.group(1).strip()] = match.group(2).strip()
                 if resp2.status_code in (301, 302):
                     url = resp2.headers.get("location", "")
                     if not url:
