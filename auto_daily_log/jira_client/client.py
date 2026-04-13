@@ -2,12 +2,22 @@ from typing import Optional
 import httpx
 from ..config import JiraConfig
 
+
 class JiraClient:
     def __init__(self, config: JiraConfig):
         self._config = config
 
     def _headers(self) -> dict:
-        return {"Authorization": f"Bearer {self._config.pat}", "Content-Type": "application/json"}
+        if self._config.auth_mode == "cookie":
+            return {
+                "Cookie": self._config.cookie,
+                "Content-Type": "application/json",
+                "X-Atlassian-Token": "no-check",
+            }
+        return {
+            "Authorization": f"Bearer {self._config.pat}",
+            "Content-Type": "application/json",
+        }
 
     def _url(self, path: str) -> str:
         base = self._config.server_url.rstrip("/")

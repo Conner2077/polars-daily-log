@@ -38,6 +38,8 @@ class GitConfig(BaseModel):
 class JiraConfig(BaseModel):
     server_url: str = ""
     pat: str = ""
+    auth_mode: str = "cookie"  # "bearer" or "cookie"
+    cookie: str = ""
 
 
 class LLMProviderConfig(BaseModel):

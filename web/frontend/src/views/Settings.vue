@@ -71,13 +71,25 @@
     <!-- Jira Tab -->
     <div v-show="activeTab === 'jira'" class="tab-content">
       <div class="settings-card">
-        <h4 class="card-title">Jira Connection</h4>
+        <h4 class="card-title">Jira 连接</h4>
         <el-form label-position="top" class="settings-form">
           <el-form-item label="Server URL">
             <el-input v-model="settings.jira_server_url" placeholder="https://jira.example.com" />
           </el-form-item>
-          <el-form-item label="Personal Access Token">
+          <el-form-item label="认证方式">
+            <el-select v-model="settings.jira_auth_mode" style="width: 100%">
+              <el-option label="Cookie（SSO 登录）" value="cookie" />
+              <el-option label="Bearer Token（PAT）" value="bearer" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="settings.jira_auth_mode === 'bearer'" label="Personal Access Token">
             <el-input v-model="settings.jira_pat" type="password" show-password />
+          </el-form-item>
+          <el-form-item v-if="settings.jira_auth_mode === 'cookie'" label="Cookie">
+            <el-input v-model="settings.jira_cookie" type="textarea" :rows="3" placeholder="从浏览器开发者工具复制 Cookie（F12 → Network → 请求 Headers → Cookie）" />
+            <p style="font-size: 12px; color: var(--text-tertiary, #aeaeb2); margin-top: 4px">
+              SSO 登录后，从浏览器请求头中复制完整的 Cookie 值。包含 JSESSIONID 和 seraph.rememberme.cookie。
+            </p>
           </el-form-item>
         </el-form>
       </div>
@@ -212,7 +224,7 @@ const keyCheckResult = ref(null)
 
 const settings = ref({
   monitor_interval_sec: 30, monitor_ocr_enabled: true, monitor_ocr_engine: 'auto',
-  monitor_screenshot_retention_days: 7, jira_server_url: '', jira_pat: '',
+  monitor_screenshot_retention_days: 7, jira_server_url: '', jira_pat: '', jira_auth_mode: 'cookie', jira_cookie: '',
   llm_engine: 'kimi', llm_api_key: '', llm_model: '', llm_base_url: '',
   summarize_prompt: '', auto_approve_prompt: '', period_summary_prompt: '',
   scheduler_enabled: true, scheduler_trigger_time: '18:00',

@@ -330,14 +330,21 @@ async def submit_to_jira(draft_id: int, request: Request):
     if draft["status"] not in ("approved", "auto_approved"):
         raise HTTPException(400, f"Draft status is '{draft['status']}', must be approved first")
 
-    jira_url = await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_server_url'")
-    jira_pat = await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_pat'")
-    if not jira_url or not jira_pat or not jira_url["value"] or not jira_pat["value"]:
-        raise HTTPException(400, "Jira not configured. Set server URL and PAT in Settings.")
+    jira_url = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_server_url'") or {}).get("value", "")
+    jira_pat = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_pat'") or {}).get("value", "")
+    jira_cookie = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_cookie'") or {}).get("value", "")
+    jira_auth_mode = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_auth_mode'") or {}).get("value", "cookie")
+
+    if not jira_url:
+        raise HTTPException(400, "Jira Server URL not configured in Settings.")
+    if jira_auth_mode == "cookie" and not jira_cookie:
+        raise HTTPException(400, "Jira Cookie not configured. Go to Settings → Jira to set it.")
+    if jira_auth_mode == "bearer" and not jira_pat:
+        raise HTTPException(400, "Jira PAT not configured in Settings.")
 
     from ...config import JiraConfig
     from ...jira_client.client import JiraClient
-    jira_config = JiraConfig(server_url=jira_url["value"], pat=jira_pat["value"])
+    jira_config = JiraConfig(server_url=jira_url, pat=jira_pat, auth_mode=jira_auth_mode, cookie=jira_cookie)
     jira = JiraClient(jira_config)
 
     started = f"{draft['date']}T09:00:00.000+0800"
