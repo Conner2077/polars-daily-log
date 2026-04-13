@@ -28,40 +28,38 @@ async def jira_sso_login(body: JiraLoginRequest, request: Request):
     db = request.app.state.db
 
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=False, trust_env=False, transport=httpx.AsyncHTTPTransport()) as client:
-            # Step 1: Login to SSO
-            resp = await client.post(
-                "https://fanruanclub.com/login/verify",
-                data={
-                    "mobile": body.mobile,
-                    "password": body.password,
-                    "referrer": body.jira_url,
-                    "app": "", "openid": "", "lang": "en",
-                },
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "X-Requested-With": "XMLHttpRequest",
-                },
-            )
-            data = resp.json()
-            if not data.get("success"):
-                return {"success": False, "message": f"SSO login failed: {data.get('msg', 'Unknown error')}"}
+        import subprocess, re, json as _json
+        clean_env = {k: v for k, v in __import__("os").environ.items()
+                     if k.lower() not in ("http_proxy", "https_proxy", "all_proxy", "no_proxy")}
 
-            redirect_url = data["data"]["redirectUrl"]
+        # Step 1: Login to SSO via curl (same network path as Step 2)
+        login_data = f"mobile={body.mobile}&password={body.password}&referrer={body.jira_url}&app=&openid=&lang=en"
+        r1 = subprocess.run([
+            "curl", "-s", "--noproxy", "*",
+            "-X", "POST",
+            "-H", "Content-Type: application/x-www-form-urlencoded",
+            "-H", "X-Requested-With: XMLHttpRequest",
+            "-d", login_data,
+            "https://fanruanclub.com/login/verify"
+        ], capture_output=True, text=True, timeout=15, env=clean_env)
 
-        # Step 2: Use curl subprocess, manually follow redirects with cookies
-        import subprocess, re
+        data = _json.loads(r1.stdout)
+        if not data.get("success"):
+            return {"success": False, "message": f"SSO login failed: {data.get('msg', 'Unknown error')}"}
+        redirect_url = data["data"]["redirectUrl"]
+
+        # Step 2: Follow redirects with cookie forwarding via curl
         debug_hops = []
         jira_cookies = {}
         url = redirect_url
 
         for hop_i in range(5):
-            cookie_header = "; ".join(f"{k}={v}" for k, v in jira_cookies.items())
             cmd = ["curl", "-s", "-D", "-", "-o", "/dev/null", "--noproxy", "*", url]
+            cookie_header = "; ".join(f"{k}={v}" for k, v in jira_cookies.items())
             if cookie_header:
                 cmd += ["-b", cookie_header]
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=15, env=clean_env)
             except Exception as e:
                 debug_hops.append(f"hop{hop_i+1}:ERR {e}")
                 break
@@ -78,7 +76,7 @@ async def jira_sso_login(body: JiraLoginRequest, request: Request):
                 elif line.lower().startswith("location:"):
                     location = line.split(":", 1)[1].strip()
 
-            debug_hops.append(f"hop{hop_i+1}:{hop_cookies} loc={location[:60]}")
+            debug_hops.append(f"hop{hop_i+1}:{hop_cookies} loc={location[:80]}")
 
             if location:
                 url = location
@@ -93,16 +91,15 @@ async def jira_sso_login(body: JiraLoginRequest, request: Request):
         if not relevant.get("JSESSIONID"):
             return {"success": False, "message": f"SSO login succeeded but no Jira JSESSIONID received. Got: {list(jira_cookies.keys())}"}
 
-        # Step 3: Try to verify (non-blocking — save cookie even if verify fails due to proxy)
+        # Step 3: Verify cookie via curl
         user = None
         try:
-            async with httpx.AsyncClient(timeout=10.0, trust_env=False, transport=httpx.AsyncHTTPTransport()) as verify_client:
-                resp4 = await verify_client.get(
-                    f"{body.jira_url.rstrip('/')}/rest/api/2/myself",
-                    headers={"Cookie": cookie_str},
-                )
-                if resp4.status_code == 200:
-                    user = resp4.json()
+            r3 = subprocess.run([
+                "curl", "-s", "--noproxy", "*",
+                "-b", cookie_str,
+                f"{body.jira_url.rstrip('/')}/rest/api/2/myself"
+            ], capture_output=True, text=True, timeout=10, env=clean_env)
+            user = _json.loads(r3.stdout) if r3.stdout.strip().startswith("{") else None
         except Exception:
             pass
 
@@ -207,6 +204,31 @@ async def list_settings(request: Request):
     db = request.app.state.db
     return await db.fetch_all("SELECT key, value, updated_at FROM settings")
 
+@router.get("/settings/test-jira-curl")
+async def test_curl():
+    """Debug: run curl from inside the server process."""
+    import subprocess, json as _json, re, os
+    env_info = {k: os.environ.get(k, "<unset>") for k in ["http_proxy", "https_proxy", "all_proxy"]}
+
+    r1 = subprocess.run([
+        "curl", "-s", "--noproxy", "*",
+        "-X", "POST",
+        "-H", "Content-Type: application/x-www-form-urlencoded",
+        "-H", "X-Requested-With: XMLHttpRequest",
+        "-d", "mobile=18862242707&password=Shibi123458!&referrer=https://work.fineres.com/&app=&openid=&lang=en",
+        "https://fanruanclub.com/login/verify"
+    ], capture_output=True, text=True, timeout=15, env={**os.environ, "http_proxy": "", "https_proxy": "", "all_proxy": ""})
+    data = _json.loads(r1.stdout)
+    url = data["data"]["redirectUrl"]
+
+    r2 = subprocess.run([
+        "curl", "-s", "-D", "-", "-o", "/dev/null", "--noproxy", "*", url
+    ], capture_output=True, text=True, timeout=15, env={**os.environ, "http_proxy": "", "https_proxy": "", "all_proxy": ""})
+
+    headers = [l.strip() for l in r2.stdout.split("\n") if l.strip().lower().startswith(("location:", "set-cookie:", "http/"))]
+    return {"env": env_info, "ticket_url": url, "hop1_headers": headers}
+
+
 @router.get("/settings/{key}")
 async def get_setting(key: str, request: Request):
     db = request.app.state.db
@@ -222,3 +244,5 @@ async def put_setting(key: str, body: SettingUpdate, request: Request):
     else:
         await db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, body.value))
     return {"key": key, "value": body.value}
+
+
