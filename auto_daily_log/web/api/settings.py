@@ -281,6 +281,12 @@ async def do_jira_login_get(request: Request, mobile: str = Query(""), password:
             if r3.stdout.strip().startswith("{"):
                 user = _json.loads(r3.stdout)
                 username = user.get("displayName", user.get("name"))
+                # Save username for nav bar display
+                existing = await db.fetch_one("SELECT key FROM settings WHERE key = 'jira_username'")
+                if existing:
+                    await db.execute("UPDATE settings SET value = ?, updated_at = datetime('now') WHERE key = 'jira_username'", (username,))
+                else:
+                    await db.execute("INSERT INTO settings (key, value) VALUES ('jira_username', ?)", (username,))
         except Exception:
             pass
 

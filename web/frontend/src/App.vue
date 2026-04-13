@@ -20,7 +20,16 @@
           </router-link>
         </div>
 
-        <div class="nav-spacer"></div>
+        <div class="nav-right">
+          <router-link v-if="jiraUser" to="/settings" class="jira-status connected">
+            <span class="jira-dot"></span>
+            {{ jiraUser }}
+          </router-link>
+          <router-link v-else to="/settings" class="jira-status disconnected">
+            <span class="jira-dot"></span>
+            Jira 未登录
+          </router-link>
+        </div>
       </div>
     </nav>
 
@@ -32,9 +41,29 @@
 </template>
 
 <script setup>
+import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import api from './api'
 
 const route = useRoute()
+const jiraUser = ref(null)
+
+async function checkJiraStatus() {
+  try {
+    const res = await api.getSetting('jira_cookie')
+    if (res.data && res.data.value) {
+      // Cookie exists, try to get username
+      const res2 = await api.getSetting('jira_username')
+      if (res2.data && res2.data.value) {
+        jiraUser.value = res2.data.value
+      } else {
+        jiraUser.value = 'Connected'
+      }
+    }
+  } catch (e) { /* ignore */ }
+}
+
+onMounted(checkJiraStatus)
 
 const navLinks = [
   { path: '/', label: 'Dashboard' },
@@ -127,9 +156,41 @@ function isActive(path) {
   background: rgba(0, 0, 0, 0.06);
 }
 
-.nav-spacer {
-  width: 140px;
+.nav-right {
   flex-shrink: 0;
+}
+
+.jira-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 980px;
+  transition: all 0.2s;
+}
+
+.jira-status.connected {
+  color: var(--success, #34c759);
+  background: rgba(52, 199, 89, 0.08);
+}
+
+.jira-status.disconnected {
+  color: var(--text-tertiary, #aeaeb2);
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.jira-status:hover {
+  opacity: 0.8;
+}
+
+.jira-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 .main-content {
