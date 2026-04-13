@@ -310,7 +310,11 @@ async function doJiraLogin() {
       jiraLogin.value.password,
       settings.value.jira_server_url || 'https://work.fineres.com/'
     )
-    jiraLoginResult.value = res.data
+    const d = res.data
+    jiraLoginResult.value = {
+      success: d.success,
+      message: d.message || (d.success ? `登录成功，已获取 ${(d.cookies || []).length} 个 Cookie` : '登录失败')
+    }
     if (res.data.success) {
       jiraLogin.value.password = ''
       await loadSettings()
