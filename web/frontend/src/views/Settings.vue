@@ -139,7 +139,11 @@
             <el-input v-model="settings.llm_model" />
           </el-form-item>
           <el-form-item label="Base URL">
-            <el-input v-model="settings.llm_base_url" />
+            <el-input v-model="settings.llm_base_url" :placeholder="basePlaceholder" />
+            <div class="form-hint">
+              填<strong>根地址</strong>，不要带 <code>/chat/completions</code> 等接口路径。留空用默认：
+              <code>{{ basePlaceholder }}</code>
+            </div>
           </el-form-item>
           <el-form-item>
             <el-button round :loading="checkingKey" @click="checkLLMKey">
@@ -378,7 +382,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import api from '../api'
@@ -414,6 +418,14 @@ const settings = ref({
 })
 const recycledItems = ref([])
 const collectors = ref([])
+
+const BASE_URL_DEFAULTS = {
+  kimi: 'https://api.moonshot.cn/v1',
+  openai: 'https://api.openai.com/v1',
+  ollama: 'http://localhost:11434',
+  claude: 'https://api.anthropic.com',
+}
+const basePlaceholder = computed(() => BASE_URL_DEFAULTS[settings.value.llm_engine] || '')
 
 function platformIcon(p) {
   if (!p) return '💻'
@@ -696,6 +708,23 @@ onMounted(() => { loadSettings(); loadGitRepos(); loadDefaultPrompts(); loadRecy
   margin-top: 32px;
   padding-top: 24px;
   border-top: 1px solid var(--border);
+}
+
+.form-hint {
+  font-size: 12px;
+  color: var(--text-tertiary, #aeaeb2);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+.form-hint code {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: "SF Mono", Menlo, Monaco, monospace;
+}
+.form-hint strong {
+  color: var(--text-primary, #1d1d1f);
 }
 
 .collector-status {

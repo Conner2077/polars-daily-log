@@ -128,9 +128,10 @@ async def _get_llm_engine_from_settings(db):
         "ollama": ("llama3", "http://localhost:11434"),
         "claude": ("claude-sonnet-4-20250514", "https://api.anthropic.com"),
     }
+    from ...summarizer.url_helper import normalize_base_url
     default_model, default_url = defaults.get(engine_name, ("", ""))
     model = model or default_model
-    base_url = base_url or default_url
+    base_url = normalize_base_url(base_url, engine=engine_name) or default_url
 
     provider = LLMProviderConfig(api_key=api_key, model=model, base_url=base_url)
     config = LLMConfig(engine=engine_name, **{engine_name: provider})

@@ -137,9 +137,10 @@ async def check_llm_key(body: LLMCheckRequest):
         "ollama": ("llama3", "http://localhost:11434"),
         "claude": ("claude-sonnet-4-20250514", "https://api.anthropic.com"),
     }
+    from ...summarizer.url_helper import normalize_base_url
     default_model, default_url = defaults.get(body.engine, ("", ""))
     model = body.model or default_model
-    base_url = body.base_url or default_url
+    base_url = normalize_base_url(body.base_url, engine=body.engine) or default_url
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -336,11 +337,18 @@ async def get_setting(key: str, request: Request):
 @router.put("/settings/{key}")
 async def put_setting(key: str, body: SettingUpdate, request: Request):
     db = request.app.state.db
+    value = body.value
+    # Normalize LLM base URL (engine-aware) so we don't double-append endpoint paths later
+    if key == "llm_base_url":
+        from ...summarizer.url_helper import normalize_base_url
+        engine_row = await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_engine'")
+        engine = engine_row["value"] if engine_row else None
+        value = normalize_base_url(value, engine=engine)
     existing = await db.fetch_one("SELECT key FROM settings WHERE key = ?", (key,))
     if existing:
-        await db.execute("UPDATE settings SET value = ?, updated_at = datetime('now') WHERE key = ?", (body.value, key))
+        await db.execute("UPDATE settings SET value = ?, updated_at = datetime('now') WHERE key = ?", (value, key))
     else:
-        await db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, body.value))
-    return {"key": key, "value": body.value}
+        await db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, value))
+    return {"key": key, "value": value}
 
 
