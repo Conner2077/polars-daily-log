@@ -25,6 +25,16 @@ class MonitorConfig(BaseModel):
     phash_enabled: bool = True
     phash_threshold: int = 20
     idle_threshold_sec: int = 180
+    # Apps that self-exit when probed via AppleScript / window title APIs.
+    # These apps get their window_title read skipped; only app name is captured.
+    hostile_apps_applescript: list[str] = [
+        "wechat", "wecom", "企业微信", "微信", "wechatwork", "wechatappex",
+    ]
+    # Apps that self-exit when screen is captured. Default empty — empirically
+    # macOS screencapture is global and does NOT trigger WeCom/WeChat self-exit
+    # (only AppleScript `tell process` does). Populate this list only if you
+    # encounter an app that truly reacts to screen capture.
+    hostile_apps_screenshot: list[str] = []
 
 
 class GitRepoConfig(BaseModel):

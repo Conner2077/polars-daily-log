@@ -123,9 +123,6 @@
     <div v-show="activeTab === 'llm'" class="tab-content">
       <div class="settings-card">
         <h4 class="card-title">LLM 配置</h4>
-        <p class="card-description">
-          选择 API 协议并填写连接信息。不熟悉的话直接点下面的快速填充，会自动把 URL 和 Model 填好，你只要填自己的 API Key 即可。
-        </p>
 
         <!-- Quick fill buttons -->
         <div class="quick-fill-row">
@@ -187,8 +184,6 @@
             可用变量：<code>{date}</code> 日期、<code>{jira_issues}</code> 活跃任务列表、<code>{git_commits}</code> 当天提交记录、<code>{activities}</code> 活动采集记录
           </p>
           <div class="prompt-toolbar">
-            <span v-if="isDefaultPrompt('summarize_prompt')" class="prompt-badge">使用默认</span>
-            <span v-else class="prompt-badge modified">已自定义</span>
             <el-button size="small" link @click="resetPrompt('summarize_prompt')">恢复默认</el-button>
           </div>
           <el-input v-model="settings.summarize_prompt" type="textarea" :rows="12" />
@@ -204,8 +199,6 @@
             可用变量：<code>{date}</code> 日期、<code>{issue_key}</code> 任务编号、<code>{issue_summary}</code> 任务标题、<code>{time_spent_hours}</code> 工时、<code>{summary}</code> 日志内容、<code>{git_commits}</code> 关联提交
           </p>
           <div class="prompt-toolbar">
-            <span v-if="isDefaultPrompt('auto_approve_prompt')" class="prompt-badge">使用默认</span>
-            <span v-else class="prompt-badge modified">已自定义</span>
             <el-button size="small" link @click="resetPrompt('auto_approve_prompt')">恢复默认</el-button>
           </div>
           <el-input v-model="settings.auto_approve_prompt" type="textarea" :rows="12" />
@@ -221,8 +214,6 @@
             可用变量：<code>{period_start}</code> 开始日期、<code>{period_end}</code> 结束日期、<code>{period_type}</code> 报告类型（周报/月报）、<code>{daily_logs}</code> 每日日志内容
           </p>
           <div class="prompt-toolbar">
-            <span v-if="isDefaultPrompt('period_summary_prompt')" class="prompt-badge">使用默认</span>
-            <span v-else class="prompt-badge modified">已自定义</span>
             <el-button size="small" link @click="resetPrompt('period_summary_prompt')">恢复默认</el-button>
           </div>
           <el-input v-model="settings.period_summary_prompt" type="textarea" :rows="12" />
@@ -664,7 +655,14 @@ async function purgeAll() {
   recycledItems.value = []
 }
 
-onMounted(() => { loadSettings(); loadGitRepos(); loadDefaultPrompts(); loadRecycled(); loadCollectors() })
+onMounted(async () => {
+  // settings must load BEFORE defaults: defaults prefill only when setting is empty
+  await loadSettings()
+  await loadDefaultPrompts()
+  loadGitRepos()
+  loadRecycled()
+  loadCollectors()
+})
 </script>
 
 <style scoped>
@@ -802,22 +800,8 @@ onMounted(() => { loadSettings(); loadGitRepos(); loadDefaultPrompts(); loadRecy
 
 .prompt-toolbar {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  justify-content: flex-end;
   margin-bottom: 8px;
-}
-.prompt-badge {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 980px;
-  font-size: 11px;
-  font-weight: 500;
-  background: #eef2f8;
-  color: #6b7785;
-}
-.prompt-badge.modified {
-  background: #fff3e0;
-  color: #e65100;
 }
 
 .form-hint {

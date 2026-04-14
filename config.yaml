@@ -14,6 +14,18 @@ monitor:
   phash_enabled: true
   phash_threshold: 10
   idle_threshold_sec: 180
+  # 企业微信等"反自动化"app：跳过 AppleScript 窗口/UI 探测（会导致它自退）
+  # 留空 [] 就完全关闭这层保护，用来自己排查哪个 app 真的有问题
+  hostile_apps_applescript:
+    - wechat
+    - wecom
+    - 企业微信
+    - 微信
+    - wechatwork
+    - wechatappex
+  # "反截屏" app：前台是这些时跳过 screencapture
+  # 排查模式：清空以验证截屏跳过是否必需
+  hostile_apps_screenshot: []
 
 git:
   repos: []
