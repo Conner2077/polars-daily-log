@@ -14,6 +14,12 @@ monitor:
   phash_enabled: true
   phash_threshold: 10
   idle_threshold_sec: 180
+  # hostile_apps_applescript / hostile_apps_screenshot 的默认值在
+  # auto_daily_log/config.py:MonitorConfig 里。
+  # 默认已包含企业微信/微信等"反自动化"app。
+  # 需要覆盖时在此添加（完整替换默认列表）：
+  # hostile_apps_applescript: [wechat, wecom, 企业微信, 微信, wechatwork, wechatappex]
+  # hostile_apps_screenshot: []
 
 git:
   repos: []

@@ -130,35 +130,43 @@ async def jira_sso_login(body: JiraLoginRequest, request: Request):
 
 @router.post("/settings/check-llm")
 async def check_llm_key(body: LLMCheckRequest):
-    """Validate LLM API key by making a minimal test call."""
-    defaults = {
-        "kimi": ("moonshot-v1-8k", "https://api.moonshot.cn/v1"),
-        "openai": ("gpt-4o", "https://api.openai.com/v1"),
-        "ollama": ("llama3", "http://localhost:11434"),
-        "claude": ("claude-sonnet-4-20250514", "https://api.anthropic.com"),
-    }
-    default_model, default_url = defaults.get(body.engine, ("", ""))
-    model = body.model or default_model
-    base_url = body.base_url or default_url
+    """Validate LLM API key by making a minimal test call.
+
+    `body.engine` can be either a legacy value (kimi/openai/claude) or
+    the canonical protocol (openai_compat/anthropic/ollama).
+    """
+    from ...summarizer.engine import resolve_protocol
+    from ...summarizer.url_helper import normalize_base_url
+
+    protocol = resolve_protocol(body.engine)
+    default_url = {
+        "openai_compat": "https://api.openai.com/v1",
+        "anthropic": "https://api.anthropic.com",
+        "ollama": "http://localhost:11434",
+    }.get(protocol, "")
+
+    model = body.model or ""
+    base_url = normalize_base_url(body.base_url, engine=body.engine) or default_url
+    if not base_url:
+        return {"valid": False, "message": "Base URL 为空，无法连接"}
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            if body.engine == "ollama":
-                # Ollama: just check if server is reachable
+            if protocol == "ollama":
                 resp = await client.get(f"{base_url}/api/tags")
                 if resp.status_code == 200:
                     models = [m["name"] for m in resp.json().get("models", [])]
                     return {"valid": True, "message": f"Ollama connected. Models: {', '.join(models[:5])}"}
                 return {"valid": False, "message": f"Ollama unreachable: {resp.status_code}"}
 
-            elif body.engine == "claude":
+            if protocol == "anthropic":
                 resp = await client.post(
                     f"{base_url}/v1/messages",
                     headers={"x-api-key": body.api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
                     json={"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]},
                 )
             else:
-                # OpenAI-compatible (Kimi, OpenAI)
+                # openai_compat
                 resp = await client.post(
                     f"{base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {body.api_key}", "Content-Type": "application/json"},
@@ -336,11 +344,18 @@ async def get_setting(key: str, request: Request):
 @router.put("/settings/{key}")
 async def put_setting(key: str, body: SettingUpdate, request: Request):
     db = request.app.state.db
+    value = body.value
+    # Normalize LLM base URL (engine-aware) so we don't double-append endpoint paths later
+    if key == "llm_base_url":
+        from ...summarizer.url_helper import normalize_base_url
+        engine_row = await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_engine'")
+        engine = engine_row["value"] if engine_row else None
+        value = normalize_base_url(value, engine=engine)
     existing = await db.fetch_one("SELECT key FROM settings WHERE key = ?", (key,))
     if existing:
-        await db.execute("UPDATE settings SET value = ?, updated_at = datetime('now') WHERE key = ?", (body.value, key))
+        await db.execute("UPDATE settings SET value = ?, updated_at = datetime('now') WHERE key = ?", (value, key))
     else:
-        await db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, body.value))
-    return {"key": key, "value": body.value}
+        await db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, value))
+    return {"key": key, "value": value}
 
 

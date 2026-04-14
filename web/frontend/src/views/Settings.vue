@@ -122,24 +122,38 @@
     <!-- LLM Tab -->
     <div v-show="activeTab === 'llm'" class="tab-content">
       <div class="settings-card">
-        <h4 class="card-title">LLM Configuration</h4>
+        <h4 class="card-title">LLM 配置</h4>
+
+        <!-- Quick fill buttons -->
+        <div class="quick-fill-row">
+          <span class="quick-fill-label">💡 快速填充：</span>
+          <el-button
+            v-for="p in presets" :key="p.name"
+            size="small" round
+            @click="applyPreset(p)"
+          >{{ p.name }}</el-button>
+        </div>
+
         <el-form label-position="top" class="settings-form">
-          <el-form-item label="Engine">
+          <el-form-item label="API 协议">
             <el-select v-model="settings.llm_engine" style="width: 100%">
-              <el-option label="Kimi (Moonshot)" value="kimi" />
-              <el-option label="OpenAI" value="openai" />
-              <el-option label="Ollama" value="ollama" />
-              <el-option label="Claude" value="claude" />
+              <el-option label="OpenAI 兼容（OpenAI / Kimi / DeepSeek / 智谱 / …）" value="openai_compat" />
+              <el-option label="Anthropic（Claude）" value="anthropic" />
+              <el-option label="Ollama 本地" value="ollama" />
             </el-select>
           </el-form-item>
           <el-form-item label="API Key">
-            <el-input v-model="settings.llm_api_key" type="password" show-password />
+            <el-input v-model="settings.llm_api_key" type="password" show-password placeholder="留空使用系统内置 Kimi Key" />
           </el-form-item>
           <el-form-item label="Model">
-            <el-input v-model="settings.llm_model" />
+            <el-input v-model="settings.llm_model" :placeholder="modelPlaceholder" />
           </el-form-item>
           <el-form-item label="Base URL">
-            <el-input v-model="settings.llm_base_url" />
+            <el-input v-model="settings.llm_base_url" :placeholder="basePlaceholder" />
+            <div class="form-hint">
+              填<strong>根地址</strong>，不要带 <code>/chat/completions</code> 等接口路径。留空用默认：
+              <code>{{ basePlaceholder }}</code>
+            </div>
           </el-form-item>
           <el-form-item>
             <el-button round :loading="checkingKey" @click="checkLLMKey">
@@ -169,7 +183,10 @@
           <p class="card-hint">
             可用变量：<code>{date}</code> 日期、<code>{jira_issues}</code> 活跃任务列表、<code>{git_commits}</code> 当天提交记录、<code>{activities}</code> 活动采集记录
           </p>
-          <el-input v-model="settings.summarize_prompt" type="textarea" :rows="12" :placeholder="defaultPrompts.summarize_prompt" />
+          <div class="prompt-toolbar">
+            <el-button size="small" link @click="resetPrompt('summarize_prompt')">恢复默认</el-button>
+          </div>
+          <el-input v-model="settings.summarize_prompt" type="textarea" :rows="12" />
         </div>
 
         <div class="prompt-section">
@@ -181,7 +198,10 @@
           <p class="card-hint">
             可用变量：<code>{date}</code> 日期、<code>{issue_key}</code> 任务编号、<code>{issue_summary}</code> 任务标题、<code>{time_spent_hours}</code> 工时、<code>{summary}</code> 日志内容、<code>{git_commits}</code> 关联提交
           </p>
-          <el-input v-model="settings.auto_approve_prompt" type="textarea" :rows="12" :placeholder="defaultPrompts.auto_approve_prompt" />
+          <div class="prompt-toolbar">
+            <el-button size="small" link @click="resetPrompt('auto_approve_prompt')">恢复默认</el-button>
+          </div>
+          <el-input v-model="settings.auto_approve_prompt" type="textarea" :rows="12" />
         </div>
 
         <div class="prompt-section">
@@ -193,7 +213,10 @@
           <p class="card-hint">
             可用变量：<code>{period_start}</code> 开始日期、<code>{period_end}</code> 结束日期、<code>{period_type}</code> 报告类型（周报/月报）、<code>{daily_logs}</code> 每日日志内容
           </p>
-          <el-input v-model="settings.period_summary_prompt" type="textarea" :rows="12" :placeholder="defaultPrompts.period_summary_prompt" />
+          <div class="prompt-toolbar">
+            <el-button size="small" link @click="resetPrompt('period_summary_prompt')">恢复默认</el-button>
+          </div>
+          <el-input v-model="settings.period_summary_prompt" type="textarea" :rows="12" />
         </div>
       </div>
     </div>
@@ -378,7 +401,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import api from '../api'
@@ -414,6 +437,36 @@ const settings = ref({
 })
 const recycledItems = ref([])
 const collectors = ref([])
+
+// Preset shortcuts — pure UI, not persisted. Clicking a preset fills
+// protocol + URL + model; user then only needs to paste their API Key.
+const presets = [
+  { name: 'Kimi',        engine: 'openai_compat', base_url: 'https://api.moonshot.cn/v1',   model: 'moonshot-v1-8k' },
+  { name: 'OpenAI',      engine: 'openai_compat', base_url: 'https://api.openai.com/v1',    model: 'gpt-4o' },
+  { name: 'DeepSeek',    engine: 'openai_compat', base_url: 'https://api.deepseek.com',     model: 'deepseek-chat' },
+  { name: 'Claude',      engine: 'anthropic',     base_url: 'https://api.anthropic.com',    model: 'claude-sonnet-4-20250514' },
+  { name: 'Ollama 本地', engine: 'ollama',        base_url: 'http://localhost:11434',       model: 'llama3' },
+]
+
+function applyPreset(p) {
+  settings.value.llm_engine = p.engine
+  settings.value.llm_base_url = p.base_url
+  settings.value.llm_model = p.model
+  ElMessage.success(`已填入 ${p.name} 预设，请补充 API Key`)
+}
+
+// Map protocol → default URL/model for placeholder hints
+const PROTOCOL_DEFAULTS = {
+  openai_compat: { url: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+  anthropic:     { url: 'https://api.anthropic.com',  model: 'claude-sonnet-4-20250514' },
+  ollama:        { url: 'http://localhost:11434',     model: 'llama3' },
+  // Legacy values still seen from old DB
+  kimi:          { url: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+  openai:        { url: 'https://api.openai.com/v1',  model: 'gpt-4o' },
+  claude:        { url: 'https://api.anthropic.com',  model: 'claude-sonnet-4-20250514' },
+}
+const basePlaceholder = computed(() => (PROTOCOL_DEFAULTS[settings.value.llm_engine] || {}).url || '')
+const modelPlaceholder = computed(() => (PROTOCOL_DEFAULTS[settings.value.llm_engine] || {}).model || '')
 
 function platformIcon(p) {
   if (!p) return '💻'
@@ -546,12 +599,36 @@ async function loadDefaultPrompts() {
   try {
     const res = await api.getDefaultPrompts()
     defaultPrompts.value = res.data
+    // If the stored setting is empty (meaning "use default"), prefill the
+    // textarea with the default so users can edit inline.
+    for (const key of ['summarize_prompt', 'auto_approve_prompt', 'period_summary_prompt']) {
+      if (!settings.value[key] || settings.value[key].trim() === '') {
+        settings.value[key] = defaultPrompts.value[key] || ''
+      }
+    }
   } catch (e) { /* ignore */ }
 }
 
+function isDefaultPrompt(key) {
+  const cur = (settings.value[key] || '').trim()
+  const def = (defaultPrompts.value[key] || '').trim()
+  return cur === def
+}
+
+function resetPrompt(key) {
+  settings.value[key] = defaultPrompts.value[key] || ''
+}
+
 async function saveAll() {
+  const PROMPT_KEYS = new Set(['summarize_prompt', 'auto_approve_prompt', 'period_summary_prompt'])
   for (const [key, value] of Object.entries(settings.value)) {
-    await api.putSetting(key, String(value))
+    let out = value
+    // Prompts: if user didn't change the default, save as empty string so
+    // that future default-template updates propagate automatically.
+    if (PROMPT_KEYS.has(key) && isDefaultPrompt(key)) {
+      out = ''
+    }
+    await api.putSetting(key, String(out))
   }
   ElMessage.success('Settings saved')
 }
@@ -578,7 +655,14 @@ async function purgeAll() {
   recycledItems.value = []
 }
 
-onMounted(() => { loadSettings(); loadGitRepos(); loadDefaultPrompts(); loadRecycled(); loadCollectors() })
+onMounted(async () => {
+  // settings must load BEFORE defaults: defaults prefill only when setting is empty
+  await loadSettings()
+  await loadDefaultPrompts()
+  loadGitRepos()
+  loadRecycled()
+  loadCollectors()
+})
 </script>
 
 <style scoped>
@@ -696,6 +780,45 @@ onMounted(() => { loadSettings(); loadGitRepos(); loadDefaultPrompts(); loadRecy
   margin-top: 32px;
   padding-top: 24px;
   border-top: 1px solid var(--border);
+}
+
+.quick-fill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 12px 0 20px;
+  padding: 12px 16px;
+  background: rgba(0, 113, 227, 0.04);
+  border-radius: 12px;
+}
+.quick-fill-label {
+  font-size: 13px;
+  color: var(--text-secondary, #86868b);
+  margin-right: 4px;
+}
+
+.prompt-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.form-hint {
+  font-size: 12px;
+  color: var(--text-tertiary, #aeaeb2);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+.form-hint code {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: "SF Mono", Menlo, Monaco, monospace;
+}
+.form-hint strong {
+  color: var(--text-primary, #1d1d1f);
 }
 
 .collector-status {

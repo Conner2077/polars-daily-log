@@ -14,9 +14,6 @@ from .phash import compute_phash, is_similar
 from .idle import get_idle_seconds
 from .watchdog import MonitorTrace
 
-# Apps that may self-exit when screen capture is detected (anti-leak protection)
-_SCREEN_CAPTURE_HOSTILE_APPS = {"wechat", "wecom", "企业微信", "微信", "wechatwork", "wxwork"}
-
 
 class MonitorService:
     def __init__(self, db: Database, config: MonitorConfig, screenshot_dir: Path, trace: Optional[MonitorTrace] = None):
@@ -61,19 +58,27 @@ class MonitorService:
         app_name = self._platform.get_frontmost_app()
         self._trace.log("got_frontmost", app=app_name)
 
+        # Apps whose internals we don't probe via AppleScript/UI APIs
+        # (they self-exit when probed). Configurable via config.monitor.
+        hostile_as = {s.lower() for s in self._config.hostile_apps_applescript}
+        app_lower = (app_name or "").lower()
+        is_hostile = app_lower in hostile_as
+
         window_title = None
-        if app_name:
+        if app_name and not is_hostile:
             self._trace.log("get_window_title", app=app_name)
             window_title = self._platform.get_window_title(app_name)
             self._trace.log("got_window_title", app=app_name, title=window_title)
+        elif is_hostile:
+            self._trace.log("skip_window_title_hostile", app=app_name)
 
         tab_title, url = (None, None)
-        if app_name:
+        if app_name and not is_hostile:
             self._trace.log("get_browser_tab", app=app_name)
             tab_title, url = self._platform.get_browser_tab(app_name)
 
         wecom_group = None
-        if app_name:
+        if app_name and not is_hostile:
             self._trace.log("get_wecom_chat_name", app=app_name)
             wecom_group = self._platform.get_wecom_chat_name(app_name)
 
@@ -101,7 +106,8 @@ class MonitorService:
         import os
         _debug_no_skip = os.environ.get("ADL_DEBUG_NO_SKIP") == "1"
         app_lower = (app or "").lower()
-        skip_screenshot = (not _debug_no_skip) and (app_lower in _SCREEN_CAPTURE_HOSTILE_APPS)
+        hostile_ss = {s.lower() for s in self._config.hostile_apps_screenshot}
+        skip_screenshot = (not _debug_no_skip) and (app_lower in hostile_ss)
 
         if ocr_enabled and not same_window and not skip_screenshot:
             today_dir = self._screenshot_dir / datetime.now().strftime("%Y-%m-%d")

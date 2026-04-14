@@ -372,6 +372,15 @@ p {
   background: rgba(0, 0, 0, 0.25);
 }
 
+/* Toast (ElMessage) — click anywhere dismisses */
+.el-message {
+  cursor: pointer;
+  user-select: none;
+}
+.el-message:hover {
+  opacity: 0.92;
+}
+
 /* ============================================
    Unified Danger Style — for delete/purge/remove actions
    Use class="danger-btn" instead of type="danger" on el-button
