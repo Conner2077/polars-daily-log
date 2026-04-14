@@ -110,32 +110,45 @@ async def generate_summary(body: GenerateRequest, request: Request):
 
 
 async def _get_llm_engine_from_settings(db):
-    """Build LLM engine from settings table (user may have configured via Web UI)."""
-    from ...config import LLMConfig, LLMProviderConfig
-    from ...summarizer.engine import get_llm_engine
+    """Build LLM engine from settings table (user may have configured via Web UI).
 
-    engine_name = (await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_engine'") or {}).get("value", "kimi")
+    Falls back to a built-in Kimi key if user hasn't configured anything —
+    saves first-run setup friction.
+    """
+    from ...config import LLMConfig, LLMProviderConfig
+    from ...summarizer.engine import get_llm_engine, resolve_protocol
+    from ...summarizer.url_helper import normalize_base_url
+
+    engine_name = (await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_engine'") or {}).get("value", "") or "kimi"
     api_key = (await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_api_key'") or {}).get("value", "")
     model = (await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_model'") or {}).get("value", "")
     base_url = (await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_base_url'") or {}).get("value", "")
 
+    # Built-in Kimi fallback — if user hasn't configured anything, use this
+    BUILTIN_KIMI_KEY = "sk-kimi-zzkJewX4KnmDC0vtysSALlszHodfjfhOIvnqb8aWuUrh7oNPezXpr9ZgEWiOjdrr"
     if not api_key:
-        return None
+        engine_name = "kimi"
+        api_key = BUILTIN_KIMI_KEY
 
-    # Fill in defaults for empty model/base_url
-    defaults = {
-        "kimi": ("moonshot-v1-8k", "https://api.moonshot.cn/v1"),
-        "openai": ("gpt-4o", "https://api.openai.com/v1"),
-        "ollama": ("llama3", "http://localhost:11434"),
-        "claude": ("claude-sonnet-4-20250514", "https://api.anthropic.com"),
-    }
-    from ...summarizer.url_helper import normalize_base_url
-    default_model, default_url = defaults.get(engine_name, ("", ""))
+    protocol = resolve_protocol(engine_name)
+    default_url = {
+        "openai_compat": "https://api.moonshot.cn/v1",  # Kimi default
+        "anthropic": "https://api.anthropic.com",
+        "ollama": "http://localhost:11434",
+    }.get(protocol, "")
+    default_model = {
+        "openai_compat": "moonshot-v1-8k",
+        "anthropic": "claude-sonnet-4-20250514",
+        "ollama": "llama3",
+    }.get(protocol, "")
+
     model = model or default_model
     base_url = normalize_base_url(base_url, engine=engine_name) or default_url
 
     provider = LLMProviderConfig(api_key=api_key, model=model, base_url=base_url)
-    config = LLMConfig(engine=engine_name, **{engine_name: provider})
+    # Route provider config into whichever slot the legacy schema expects.
+    slot = engine_name if engine_name in ("kimi", "openai", "claude", "ollama") else "kimi"
+    config = LLMConfig(engine=engine_name, **{slot: provider})
     return get_llm_engine(config)
 
 

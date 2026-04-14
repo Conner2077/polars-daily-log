@@ -122,21 +122,34 @@
     <!-- LLM Tab -->
     <div v-show="activeTab === 'llm'" class="tab-content">
       <div class="settings-card">
-        <h4 class="card-title">LLM Configuration</h4>
+        <h4 class="card-title">LLM 配置</h4>
+        <p class="card-description">
+          选择 API 协议并填写连接信息。不熟悉的话直接点下面的快速填充，会自动把 URL 和 Model 填好，你只要填自己的 API Key 即可。
+        </p>
+
+        <!-- Quick fill buttons -->
+        <div class="quick-fill-row">
+          <span class="quick-fill-label">💡 快速填充：</span>
+          <el-button
+            v-for="p in presets" :key="p.name"
+            size="small" round
+            @click="applyPreset(p)"
+          >{{ p.name }}</el-button>
+        </div>
+
         <el-form label-position="top" class="settings-form">
-          <el-form-item label="Engine">
+          <el-form-item label="API 协议">
             <el-select v-model="settings.llm_engine" style="width: 100%">
-              <el-option label="Kimi (Moonshot)" value="kimi" />
-              <el-option label="OpenAI" value="openai" />
-              <el-option label="Ollama" value="ollama" />
-              <el-option label="Claude" value="claude" />
+              <el-option label="OpenAI 兼容（OpenAI / Kimi / DeepSeek / 智谱 / …）" value="openai_compat" />
+              <el-option label="Anthropic（Claude）" value="anthropic" />
+              <el-option label="Ollama 本地" value="ollama" />
             </el-select>
           </el-form-item>
           <el-form-item label="API Key">
-            <el-input v-model="settings.llm_api_key" type="password" show-password />
+            <el-input v-model="settings.llm_api_key" type="password" show-password placeholder="留空使用系统内置 Kimi Key" />
           </el-form-item>
           <el-form-item label="Model">
-            <el-input v-model="settings.llm_model" />
+            <el-input v-model="settings.llm_model" :placeholder="modelPlaceholder" />
           </el-form-item>
           <el-form-item label="Base URL">
             <el-input v-model="settings.llm_base_url" :placeholder="basePlaceholder" />
@@ -434,13 +447,35 @@ const settings = ref({
 const recycledItems = ref([])
 const collectors = ref([])
 
-const BASE_URL_DEFAULTS = {
-  kimi: 'https://api.moonshot.cn/v1',
-  openai: 'https://api.openai.com/v1',
-  ollama: 'http://localhost:11434',
-  claude: 'https://api.anthropic.com',
+// Preset shortcuts — pure UI, not persisted. Clicking a preset fills
+// protocol + URL + model; user then only needs to paste their API Key.
+const presets = [
+  { name: 'Kimi',        engine: 'openai_compat', base_url: 'https://api.moonshot.cn/v1',   model: 'moonshot-v1-8k' },
+  { name: 'OpenAI',      engine: 'openai_compat', base_url: 'https://api.openai.com/v1',    model: 'gpt-4o' },
+  { name: 'DeepSeek',    engine: 'openai_compat', base_url: 'https://api.deepseek.com',     model: 'deepseek-chat' },
+  { name: 'Claude',      engine: 'anthropic',     base_url: 'https://api.anthropic.com',    model: 'claude-sonnet-4-20250514' },
+  { name: 'Ollama 本地', engine: 'ollama',        base_url: 'http://localhost:11434',       model: 'llama3' },
+]
+
+function applyPreset(p) {
+  settings.value.llm_engine = p.engine
+  settings.value.llm_base_url = p.base_url
+  settings.value.llm_model = p.model
+  ElMessage.success(`已填入 ${p.name} 预设，请补充 API Key`)
 }
-const basePlaceholder = computed(() => BASE_URL_DEFAULTS[settings.value.llm_engine] || '')
+
+// Map protocol → default URL/model for placeholder hints
+const PROTOCOL_DEFAULTS = {
+  openai_compat: { url: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+  anthropic:     { url: 'https://api.anthropic.com',  model: 'claude-sonnet-4-20250514' },
+  ollama:        { url: 'http://localhost:11434',     model: 'llama3' },
+  // Legacy values still seen from old DB
+  kimi:          { url: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+  openai:        { url: 'https://api.openai.com/v1',  model: 'gpt-4o' },
+  claude:        { url: 'https://api.anthropic.com',  model: 'claude-sonnet-4-20250514' },
+}
+const basePlaceholder = computed(() => (PROTOCOL_DEFAULTS[settings.value.llm_engine] || {}).url || '')
+const modelPlaceholder = computed(() => (PROTOCOL_DEFAULTS[settings.value.llm_engine] || {}).model || '')
 
 function platformIcon(p) {
   if (!p) return '💻'
@@ -747,6 +782,22 @@ onMounted(() => { loadSettings(); loadGitRepos(); loadDefaultPrompts(); loadRecy
   margin-top: 32px;
   padding-top: 24px;
   border-top: 1px solid var(--border);
+}
+
+.quick-fill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 12px 0 20px;
+  padding: 12px 16px;
+  background: rgba(0, 113, 227, 0.04);
+  border-radius: 12px;
+}
+.quick-fill-label {
+  font-size: 13px;
+  color: var(--text-secondary, #86868b);
+  margin-right: 4px;
 }
 
 .prompt-toolbar {
