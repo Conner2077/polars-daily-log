@@ -16,6 +16,7 @@ class PrivacyConfig(BaseModel):
 
 
 class MonitorConfig(BaseModel):
+    enabled: bool = True  # disable for pure-server mode (no built-in collector)
     interval_sec: int = 30
     ocr_enabled: bool = True
     ocr_engine: str = "auto"
@@ -77,6 +78,18 @@ class AutoApproveConfig(BaseModel):
 class SystemConfig(BaseModel):
     language: str = "zh"
     data_retention_days: int = 90
+    data_dir: str = ""  # default: ~/.auto_daily_log
+    activity_retention_days: int = 7    # active activities kept this many days
+    recycle_retention_days: int = 30    # soft-deleted activities kept this many days
+
+    @property
+    def resolved_data_dir(self) -> Path:
+        if self.data_dir:
+            p = Path(self.data_dir).expanduser()
+        else:
+            p = Path.home() / ".auto_daily_log"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
 
 
 class EmbeddingConfig(BaseModel):

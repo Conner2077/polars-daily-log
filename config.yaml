@@ -3,6 +3,7 @@ server:
   host: "0.0.0.0"
 
 monitor:
+  enabled: true   # false 则为纯 server 模式（不采集本机，只接收远程 collector 数据）
   interval_sec: 30
   ocr_enabled: false
   ocr_engine: auto
@@ -54,3 +55,6 @@ embedding:
 system:
   language: "zh"
   data_retention_days: 90
+  data_dir: ""  # 留空默认 ~/.auto_daily_log，可改为如 /opt/auto_daily_log/data
+  activity_retention_days: 7   # 活动记录保留天数，超过自动移入回收站
+  recycle_retention_days: 30   # 回收站保留天数，超过永久删除

@@ -17,16 +17,22 @@ class DraftUpdate(BaseModel):
     summary: Optional[str] = None
     issue_key: Optional[str] = None
 
+class IssueUpdate(BaseModel):
+    issue_key: Optional[str] = None
+    time_spent_hours: Optional[float] = None
+    summary: Optional[str] = None
+
 @router.get("/worklogs")
 async def list_drafts(request: Request, date: str = Query(default=None), tag: str = Query(default=None)):
     db = request.app.state.db
     target = date or __import__("datetime").date.today().isoformat()
     if tag:
         return await db.fetch_all(
-            "SELECT * FROM worklog_drafts WHERE tag = ? ORDER BY created_at DESC", (tag,)
+            "SELECT * FROM worklog_drafts WHERE tag = ? ORDER BY date DESC, created_at DESC", (tag,)
         )
     return await db.fetch_all(
-        "SELECT * FROM worklog_drafts WHERE date = ? ORDER BY created_at", (target,)
+        "SELECT * FROM worklog_drafts WHERE date = ? ORDER BY CASE tag WHEN 'daily' THEN 0 ELSE 1 END, created_at DESC",
+        (target,),
     )
 
 class GenerateRequest(BaseModel):
@@ -150,12 +156,12 @@ async def _generate_daily(db, request, today, start, end):
             drafts = await summarizer.generate_drafts(start)
 
             if drafts:
-                for d in drafts:
-                    await db.execute(
-                        "UPDATE worklog_drafts SET tag = 'daily', period_start = ?, period_end = ? WHERE id = ?",
-                        (start, end, d["id"]),
-                    )
-                return {"ids": [d["id"] for d in drafts], "tag": "daily", "period_start": start, "period_end": end, "count": len(drafts)}
+                draft = drafts[0]  # Single record per day
+                await db.execute(
+                    "UPDATE worklog_drafts SET tag = 'daily', period_start = ?, period_end = ? WHERE id = ?",
+                    (start, end, draft["id"]),
+                )
+                return {"id": draft["id"], "tag": "daily", "period_start": start, "period_end": end}
             # LLM returned empty, fall through to fallback
             print("[Generate] LLM returned empty result, using fallback")
         except Exception as e:
@@ -169,7 +175,7 @@ async def _generate_daily_fallback(db, today, start, end):
     """Fallback daily generation without LLM — raw activity + commit summary."""
     from collections import defaultdict
     activities = await db.fetch_all(
-        "SELECT * FROM activities WHERE date(timestamp) >= ? AND date(timestamp) <= ? AND category != 'idle' ORDER BY timestamp",
+        "SELECT * FROM activities WHERE date(timestamp) >= ? AND date(timestamp) <= ? AND category != 'idle' AND deleted_at IS NULL ORDER BY timestamp",
         (start, end),
     )
     commits = await db.fetch_all(
@@ -218,14 +224,24 @@ async def _generate_period(db, request, tag, today, start, end):
     if not daily_logs:
         raise HTTPException(404, f"No daily logs found for {start} to {end}. Generate daily logs first.")
 
-    # Build text from daily logs
+    # Build text from daily logs (new format: summary is JSON array)
     daily_text_parts = []
     total_sec = 0
     for log in daily_logs:
         total_sec += log.get("time_spent_sec", 0)
-        daily_text_parts.append(
-            f"【{log.get('period_start', log['date'])}】{log.get('issue_key', '')} ({round(log.get('time_spent_sec', 0) / 3600, 1)}h)\n{log['summary']}"
-        )
+        log_date = log.get('period_start', log['date'])
+        # Parse JSON array summary
+        try:
+            issues = json.loads(log['summary'])
+            issue_parts = []
+            for iss in issues:
+                issue_parts.append(f"  - {iss['issue_key']} ({iss['time_spent_hours']}h): {iss['summary']}")
+            daily_text_parts.append(f"【{log_date}】\n" + "\n".join(issue_parts))
+        except (json.JSONDecodeError, TypeError):
+            # Fallback for old format
+            daily_text_parts.append(
+                f"【{log_date}】{log.get('issue_key', '')} ({round(log.get('time_spent_sec', 0) / 3600, 1)}h)\n{log['summary']}"
+            )
     daily_text = "\n\n".join(daily_text_parts)
 
     # Try LLM (settings table first, then app state)
@@ -321,15 +337,8 @@ async def approve_all(request: Request, date: str = Query(default=None)):
         await db.execute("INSERT INTO audit_logs (draft_id, action) VALUES (?, 'approved')", (d["id"],))
     return {"status": "all_approved", "count": len(drafts)}
 
-@router.post("/worklogs/{draft_id}/submit")
-async def submit_to_jira(draft_id: int, request: Request):
-    db = request.app.state.db
-    draft = await db.fetch_one("SELECT * FROM worklog_drafts WHERE id = ?", (draft_id,))
-    if not draft:
-        raise HTTPException(404, "Draft not found")
-    if draft["status"] not in ("approved", "auto_approved"):
-        raise HTTPException(400, f"Draft status is '{draft['status']}', must be approved first")
-
+async def _get_jira_client(db):
+    """Build JiraClient from settings."""
     jira_url = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_server_url'") or {}).get("value", "")
     jira_pat = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_pat'") or {}).get("value", "")
     jira_cookie = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_cookie'") or {}).get("value", "")
@@ -345,27 +354,158 @@ async def submit_to_jira(draft_id: int, request: Request):
     from ...config import JiraConfig
     from ...jira_client.client import JiraClient
     jira_config = JiraConfig(server_url=jira_url, pat=jira_pat, auth_mode=jira_auth_mode, cookie=jira_cookie)
-    jira = JiraClient(jira_config)
+    return JiraClient(jira_config)
 
-    # Use first activity timestamp of the day, fallback to 09:00
+
+async def _get_started_timestamp(db, draft_date: str) -> str:
+    """Get first activity timestamp of the day, fallback to 09:00."""
     first_activity = await db.fetch_one(
         "SELECT timestamp FROM activities WHERE date(timestamp) = ? ORDER BY timestamp LIMIT 1",
-        (draft['date'],),
+        (draft_date,),
     )
     if first_activity and first_activity['timestamp']:
-        ts = first_activity['timestamp'][:19]  # 2026-04-13T10:30:00
-        started = f"{ts}.000+0800"
-    else:
-        started = f"{draft['date']}T09:00:00.000+0800"
+        ts = first_activity['timestamp'][:19]
+        return f"{ts}.000+0800"
+    return f"{draft_date}T09:00:00.000+0800"
+
+
+@router.post("/worklogs/{draft_id}/submit")
+async def submit_to_jira(draft_id: int, request: Request):
+    """Submit ALL issues in a daily record to Jira."""
+    db = request.app.state.db
+    draft = await db.fetch_one("SELECT * FROM worklog_drafts WHERE id = ?", (draft_id,))
+    if not draft:
+        raise HTTPException(404, "Draft not found")
+    if draft["status"] not in ("approved", "auto_approved"):
+        raise HTTPException(400, f"Draft status is '{draft['status']}', must be approved first")
+
+    jira = await _get_jira_client(db)
+    started = await _get_started_timestamp(db, draft['date'])
+
+    # Parse issue entries from summary JSON
     try:
-        result = await jira.submit_worklog(issue_key=draft["issue_key"], time_spent_sec=draft["time_spent_sec"], comment=draft["summary"], started=started)
-        jira_worklog_id = result.get("id", "")
+        issues = json.loads(draft["summary"])
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(400, "Invalid summary format, expected JSON array")
+
+    _SKIP_KEYS = {"OTHER", "ALL", "DAILY"}
+    results = []
+    for i, issue in enumerate(issues):
+        if issue.get("jira_worklog_id"):
+            continue  # Already submitted
+        if issue["issue_key"] in _SKIP_KEYS:
+            results.append({"issue_key": issue["issue_key"], "skipped": True})
+            continue
+        try:
+            time_sec = int(issue["time_spent_hours"] * 3600)
+            result = await jira.submit_worklog(
+                issue_key=issue["issue_key"], time_spent_sec=time_sec,
+                comment=issue["summary"], started=started,
+            )
+            issues[i]["jira_worklog_id"] = str(result.get("id", ""))
+            results.append({"issue_key": issue["issue_key"], "jira_worklog_id": issues[i]["jira_worklog_id"]})
+        except Exception as e:
+            results.append({"issue_key": issue["issue_key"], "error": str(e)})
+
+    # Update summary with jira_worklog_ids
+    await db.execute(
+        "UPDATE worklog_drafts SET summary = ?, status = 'submitted', updated_at = datetime('now') WHERE id = ?",
+        (json.dumps(issues, ensure_ascii=False), draft_id),
+    )
+    await db.execute(
+        "INSERT INTO audit_logs (draft_id, action, jira_response) VALUES (?, 'submitted', ?)",
+        (draft_id, json.dumps(results, ensure_ascii=False)),
+    )
+    return {"status": "submitted", "results": results}
+
+
+@router.post("/worklogs/{draft_id}/submit-issue/{issue_index}")
+async def submit_single_issue(draft_id: int, issue_index: int, request: Request):
+    """Submit a single issue from a daily record to Jira."""
+    db = request.app.state.db
+    draft = await db.fetch_one("SELECT * FROM worklog_drafts WHERE id = ?", (draft_id,))
+    if not draft:
+        raise HTTPException(404, "Draft not found")
+    if draft["status"] not in ("approved", "auto_approved"):
+        raise HTTPException(400, f"Draft status is '{draft['status']}', must be approved first")
+
+    try:
+        issues = json.loads(draft["summary"])
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(400, "Invalid summary format")
+
+    if issue_index < 0 or issue_index >= len(issues):
+        raise HTTPException(400, f"Invalid issue index {issue_index}")
+
+    issue = issues[issue_index]
+    if issue.get("jira_worklog_id"):
+        raise HTTPException(400, f"Issue {issue['issue_key']} already submitted")
+
+    jira = await _get_jira_client(db)
+    started = await _get_started_timestamp(db, draft['date'])
+
+    try:
+        time_sec = int(issue["time_spent_hours"] * 3600)
+        result = await jira.submit_worklog(
+            issue_key=issue["issue_key"], time_spent_sec=time_sec,
+            comment=issue["summary"], started=started,
+        )
+        issues[issue_index]["jira_worklog_id"] = str(result.get("id", ""))
     except Exception as e:
         raise HTTPException(502, f"Jira API error: {str(e)}")
 
-    await db.execute("UPDATE worklog_drafts SET status = 'submitted', jira_worklog_id = ?, updated_at = datetime('now') WHERE id = ?", (str(jira_worklog_id), draft_id))
-    await db.execute("INSERT INTO audit_logs (draft_id, action, jira_response) VALUES (?, 'submitted', ?)", (draft_id, json.dumps(result, ensure_ascii=False)))
-    return {"status": "submitted", "jira_worklog_id": jira_worklog_id}
+    # Check if all issues are submitted → mark whole draft as submitted
+    all_submitted = all(iss.get("jira_worklog_id") for iss in issues)
+    new_status = "submitted" if all_submitted else draft["status"]
+
+    await db.execute(
+        "UPDATE worklog_drafts SET summary = ?, status = ?, updated_at = datetime('now') WHERE id = ?",
+        (json.dumps(issues, ensure_ascii=False), new_status, draft_id),
+    )
+    await db.execute(
+        "INSERT INTO audit_logs (draft_id, action, jira_response) VALUES (?, 'submitted_issue', ?)",
+        (draft_id, json.dumps({"issue_index": issue_index, "issue_key": issue["issue_key"], "result": result}, ensure_ascii=False)),
+    )
+    return {"status": "submitted", "issue_key": issue["issue_key"], "jira_worklog_id": issues[issue_index]["jira_worklog_id"], "all_submitted": all_submitted}
+
+
+@router.patch("/worklogs/{draft_id}/issues/{issue_index}")
+async def update_issue(draft_id: int, issue_index: int, body: IssueUpdate, request: Request):
+    """Update a single issue entry within a daily record."""
+    db = request.app.state.db
+    draft = await db.fetch_one("SELECT * FROM worklog_drafts WHERE id = ?", (draft_id,))
+    if not draft:
+        raise HTTPException(404, "Draft not found")
+
+    try:
+        issues = json.loads(draft["summary"])
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(400, "Invalid summary format")
+
+    if issue_index < 0 or issue_index >= len(issues):
+        raise HTTPException(400, f"Invalid issue index {issue_index}")
+
+    before = json.dumps(issues[issue_index], ensure_ascii=False)
+
+    if body.issue_key is not None:
+        issues[issue_index]["issue_key"] = body.issue_key
+    if body.time_spent_hours is not None:
+        issues[issue_index]["time_spent_hours"] = body.time_spent_hours
+    if body.summary is not None:
+        issues[issue_index]["summary"] = body.summary
+
+    # Recalculate total time
+    total_sec = sum(int(iss["time_spent_hours"] * 3600) for iss in issues)
+
+    await db.execute(
+        "UPDATE worklog_drafts SET summary = ?, time_spent_sec = ?, user_edited = 1, updated_at = datetime('now') WHERE id = ?",
+        (json.dumps(issues, ensure_ascii=False), total_sec, draft_id),
+    )
+    await db.execute(
+        "INSERT INTO audit_logs (draft_id, action, before_snapshot, after_snapshot) VALUES (?, 'edited_issue', ?, ?)",
+        (draft_id, before, json.dumps(issues[issue_index], ensure_ascii=False)),
+    )
+    return {"status": "updated"}
 
 @router.get("/worklogs/{draft_id}/audit")
 async def get_audit_trail(draft_id: int, request: Request):

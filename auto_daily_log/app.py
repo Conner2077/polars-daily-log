@@ -31,14 +31,66 @@ class Application:
         self.scheduler: AsyncIOScheduler = None
 
     async def _init_db(self) -> None:
-        db_path = Path.home() / ".auto_daily_log" / "data.db"
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+        data_dir = self.config.system.resolved_data_dir
+        db_path = data_dir / "data.db"
         self.db = Database(db_path, embedding_dimensions=self.config.embedding.dimensions)
         await self.db.initialize()
 
     async def _init_monitor(self) -> None:
-        screenshot_dir = Path.home() / ".auto_daily_log" / "screenshots"
+        if not self.config.monitor.enabled:
+            # Pure-server mode: no built-in collector
+            self.monitor = None
+            return
+        screenshot_dir = self.config.system.resolved_data_dir / "screenshots"
         self.monitor = MonitorService(self.db, self.config.monitor, screenshot_dir)
+
+    async def _register_builtin_collector(self) -> None:
+        """Auto-register the built-in monitor as collector machine_id='local'.
+
+        Idempotent — upserts on each server start with fresh platform detection.
+        The token_hash is set to a sentinel that the normal auth path cannot
+        match (no collector ever sends this); the built-in monitor writes
+        directly to DB, not via the HTTP ingest path.
+        """
+        import json
+        import platform as _platform
+        import socket as _socket
+
+        try:
+            from auto_daily_log_collector.platforms.factory import detect_platform_id
+            from auto_daily_log_collector.platforms import create_adapter
+            platform_id = detect_platform_id()
+            adapter = create_adapter(platform_id)
+            platform_detail = adapter.platform_detail()
+            capabilities = sorted(adapter.capabilities())
+        except Exception:
+            # Fallback to basic detection if collector package fails
+            platform_id = _platform.system().lower()
+            platform_detail = f"{_platform.system()} {_platform.release()}"
+            capabilities = []
+
+        existing = await self.db.fetch_one(
+            "SELECT id FROM collectors WHERE machine_id = ?", ("local",)
+        )
+        if existing:
+            await self.db.execute(
+                """UPDATE collectors
+                   SET platform = ?, platform_detail = ?, capabilities = ?,
+                       hostname = ?, last_seen = datetime('now'), is_active = 1
+                   WHERE machine_id = ?""",
+                (platform_id, platform_detail, json.dumps(capabilities),
+                 _socket.gethostname(), "local"),
+            )
+        else:
+            await self.db.execute(
+                """INSERT INTO collectors
+                   (machine_id, name, hostname, platform, platform_detail,
+                    capabilities, token_hash, last_seen, is_active)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), 1)""",
+                ("local", "Built-in (this machine)", _socket.gethostname(),
+                 platform_id, platform_detail, json.dumps(capabilities),
+                 "__builtin_no_http_auth__"),
+            )
 
     def _init_scheduler(self) -> None:
         if not self.config.scheduler.enabled:
@@ -80,6 +132,26 @@ class Application:
                 auto_approve_job, "cron", hour=approve_hour, minute=approve_minute, id="auto_approve"
             )
 
+        # Activity cleanup job — runs daily at 03:00
+        async def activity_cleanup_job():
+            retention = self.config.system.activity_retention_days
+            recycle = self.config.system.recycle_retention_days
+            # Soft-delete activities older than retention days
+            await self.db.execute(
+                "UPDATE activities SET deleted_at = datetime('now') "
+                "WHERE deleted_at IS NULL AND date(timestamp) < date('now', ?)",
+                (f"-{retention} days",),
+            )
+            # Permanently delete recycled activities older than recycle retention
+            await self.db.execute(
+                "DELETE FROM activities WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', ?)",
+                (f"-{recycle} days",),
+            )
+
+        self.scheduler.add_job(
+            activity_cleanup_job, "cron", hour=3, minute=0, id="activity_cleanup"
+        )
+
         self.scheduler.start()
 
     async def run(self) -> None:
@@ -87,20 +159,33 @@ class Application:
         await self._init_monitor()
         self._init_scheduler()
 
-        app = create_app(self.db)
+        # Auto-register built-in collector (machine_id='local') iff monitor is on
+        if self.monitor is not None:
+            await self._register_builtin_collector()
 
-        # Attach LLM engine to app state for API use (daily generate)
+        app = create_app(self.db)
+        app.state.config = self.config
+
         try:
             app.state._llm_engine = get_llm_engine(self.config.llm)
         except Exception:
             app.state._llm_engine = None
 
-        # Attach searcher to app state if embedding is enabled
         emb_engine = get_embedding_engine(self.config.llm, self.config.embedding)
         if emb_engine:
             app.state.searcher = Searcher(self.db, emb_engine)
 
-        monitor_task = asyncio.create_task(self.monitor.start())
+        monitor_task = None
+        watchdog = None
+        watchdog_task = None
+        if self.monitor is not None:
+            monitor_task = asyncio.create_task(self.monitor.start())
+            from .monitor.watchdog import WecomWatchdog
+            dump_dir = self.config.system.resolved_data_dir / "watchdog"
+            watchdog = WecomWatchdog(self.monitor.trace, dump_dir)
+            watchdog_task = asyncio.create_task(watchdog.start())
+        else:
+            print("[Server] monitor.enabled = false — running in pure-server mode")
 
         config = uvicorn.Config(
             app,
@@ -113,8 +198,14 @@ class Application:
         try:
             await server.serve()
         finally:
-            self.monitor.stop()
-            monitor_task.cancel()
+            if self.monitor is not None:
+                self.monitor.stop()
+            if monitor_task:
+                monitor_task.cancel()
+            if watchdog:
+                watchdog.stop()
+            if watchdog_task:
+                watchdog_task.cancel()
             if self.scheduler:
                 self.scheduler.shutdown()
             await self.db.close()

@@ -371,3 +371,60 @@ p {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.25);
 }
+
+/* ============================================
+   Unified Danger Style — for delete/purge/remove actions
+   Use class="danger-btn" instead of type="danger" on el-button
+   for a softer, less jarring red that keeps text readable.
+   ============================================ */
+.el-button.danger-btn,
+.el-button.danger-btn:focus {
+  background: #fdecec;
+  color: #c62828;
+  border-color: #f5c6c6;
+}
+.el-button.danger-btn:hover {
+  background: #f8dada;
+  color: #b71c1c;
+  border-color: #e89a9a;
+}
+.el-button.danger-btn.is-loading {
+  background: #fdecec;
+  color: #c62828;
+}
+
+/* Strong danger — for "永久删除 / 清空回收站" irreversible actions */
+.el-button.danger-btn-strong,
+.el-button.danger-btn-strong:focus {
+  background: #e57373;
+  color: #fff;
+  border-color: #e57373;
+}
+.el-button.danger-btn-strong:hover {
+  background: #d32f2f;
+  border-color: #d32f2f;
+  color: #fff;
+}
+
+/* ============================================
+   Popconfirm — more breathable layout
+   ============================================ */
+.el-popconfirm {
+  padding: 6px 4px;
+}
+.el-popconfirm__main {
+  padding: 8px 4px 12px;
+  align-items: flex-start;
+  line-height: 1.6;
+}
+.el-popconfirm__icon {
+  margin-top: 2px;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+.el-popconfirm__action {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}

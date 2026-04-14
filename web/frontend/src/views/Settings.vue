@@ -219,6 +219,155 @@
       </div>
     </div>
 
+    <!-- Collectors Tab -->
+    <div v-show="activeTab === 'collectors'" class="tab-content">
+      <div class="settings-card">
+        <h4 class="card-title">数据采集节点</h4>
+        <p class="card-description">
+          列出所有已注册的 collector。本机自带的 collector 使用 machine_id = <code>local</code>。
+          远程 collector 通过 <code>python -m auto_daily_log_collector</code> 启动。
+        </p>
+
+        <div v-if="collectors.length === 0" style="text-align: center; padding: 32px; color: var(--text-tertiary)">
+          还没有采集节点，首次启动 collector 会自动出现在这里
+        </div>
+        <el-table v-else :data="collectors" style="width: 100%">
+          <el-table-column label="名称" min-width="140">
+            <template #default="{ row }">
+              <span style="margin-right: 6px">{{ platformIcon(row.platform) }}</span>
+              <strong>{{ row.name }}</strong>
+              <span v-if="row.hostname" style="color: var(--text-tertiary); font-size: 12px; margin-left: 6px">
+                ({{ row.hostname }})
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="平台" min-width="160">
+            <template #default="{ row }">
+              <span style="font-size: 12px; color: var(--text-secondary)">
+                {{ row.platform_detail || row.platform || '—' }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="能力" min-width="180">
+            <template #default="{ row }">
+              <el-tag
+                v-for="cap in row.capabilities" :key="cap"
+                size="small"
+                style="margin-right: 4px; margin-bottom: 2px"
+              >{{ cap }}</el-tag>
+              <span v-if="!row.capabilities || row.capabilities.length === 0" style="color: var(--text-tertiary); font-size: 12px">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="100">
+            <template #default="{ row }">
+              <span v-if="row.is_paused" class="collector-status paused">已暂停</span>
+              <span v-else-if="isOnline(row)" class="collector-status online">在线</span>
+              <span v-else class="collector-status offline">离线</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="最后心跳" min-width="160">
+            <template #default="{ row }">
+              <span style="font-size: 12px; color: var(--text-secondary)">
+                {{ row.last_seen || '—' }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="260">
+            <template #default="{ row }">
+              <el-button
+                v-if="row.is_paused"
+                size="small" round
+                @click="resumeCol(row)"
+              >继续</el-button>
+              <el-button
+                v-else
+                size="small" round
+                @click="pauseCol(row)"
+              >暂停</el-button>
+              <el-popconfirm
+                :title="`移除 ${row.name}？不会删除历史数据`"
+                confirm-button-text="移除"
+                cancel-button-text="取消"
+                :width="260"
+                @confirm="removeCol(row)"
+              >
+                <template #reference>
+                  <el-button size="small" round class="danger-btn">移除</el-button>
+                </template>
+              </el-popconfirm>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div style="margin-top: 16px; display: flex; justify-content: flex-end">
+          <el-button size="small" round @click="loadCollectors">
+            <el-icon><Refresh /></el-icon>&nbsp;刷新
+          </el-button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recycle Bin Tab -->
+    <div v-show="activeTab === 'recycle'" class="tab-content">
+      <div class="settings-card">
+        <h4 class="card-title">回收站</h4>
+        <p class="card-description">
+          被删除的活动记录会保留在回收站中，超过 {{ settings.recycle_retention_days || 30 }} 天后自动永久删除。
+        </p>
+        <el-form label-position="top" class="settings-form" style="margin-bottom: 20px">
+          <el-form-item label="活动记录保留天数（超过自动移入回收站）">
+            <el-input-number v-model="settings.activity_retention_days" :min="1" :max="365" />
+          </el-form-item>
+          <el-form-item label="回收站保留天数（超过自动永久删除）">
+            <el-input-number v-model="settings.recycle_retention_days" :min="1" :max="365" />
+          </el-form-item>
+        </el-form>
+
+        <div v-if="recycledItems.length === 0" style="text-align: center; padding: 32px; color: var(--text-tertiary)">
+          回收站为空
+        </div>
+        <el-table v-else :data="recycledItems" style="width: 100%">
+          <el-table-column prop="date" label="日期" width="140" />
+          <el-table-column prop="count" label="记录数" width="100" />
+          <el-table-column prop="deleted_at" label="删除时间" width="180">
+            <template #default="{ row }">
+              {{ row.deleted_at?.substring(0, 16) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="200">
+            <template #default="{ row }">
+              <el-button size="small" round @click="restoreDate(row.date)">恢复</el-button>
+              <el-popconfirm
+                title="永久删除后不可恢复，确认继续？"
+                confirm-button-text="永久删除"
+                cancel-button-text="取消"
+                :width="280"
+                @confirm="purgeDate(row.date)"
+              >
+                <template #reference>
+                  <el-button size="small" round class="danger-btn">永久删除</el-button>
+                </template>
+              </el-popconfirm>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div v-if="recycledItems.length > 0" style="margin-top: 16px; display: flex; justify-content: flex-end">
+          <el-popconfirm
+            title="清空回收站后所有记录将永久删除，确认继续？"
+            confirm-button-text="清空"
+            cancel-button-text="取消"
+            :width="300"
+            @confirm="purgeAll"
+          >
+            <template #reference>
+              <el-button round class="danger-btn-strong">清空回收站</el-button>
+            </template>
+          </el-popconfirm>
+        </div>
+      </div>
+    </div>
+
     <!-- Save Button -->
     <div class="save-bar">
       <el-button type="primary" round size="large" @click="saveAll">
@@ -231,6 +380,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Refresh } from '@element-plus/icons-vue'
 import api from '../api'
 
 const activeTab = ref('monitor')
@@ -241,6 +391,8 @@ const tabs = [
   { name: 'llm', label: 'LLM 引擎' },
   { name: 'prompts', label: 'Prompt 模板' },
   { name: 'scheduler', label: '定时任务' },
+  { name: 'collectors', label: '数据采集节点' },
+  { name: 'recycle', label: '回收站' },
 ]
 
 const isLocalhost = window.location.hostname === 'localhost'
@@ -258,7 +410,49 @@ const settings = ref({
   summarize_prompt: '', auto_approve_prompt: '', period_summary_prompt: '',
   scheduler_enabled: true, scheduler_trigger_time: '18:00',
   auto_approve_enabled: true, auto_approve_trigger_time: '21:30',
+  activity_retention_days: 7, recycle_retention_days: 30,
 })
+const recycledItems = ref([])
+const collectors = ref([])
+
+function platformIcon(p) {
+  if (!p) return '💻'
+  if (p === 'macos') return '🖥'
+  if (p === 'windows') return '🪟'
+  if (p.startsWith('linux')) return '🐧'
+  return '💻'
+}
+
+function isOnline(c) {
+  if (!c.last_seen) return false
+  const last = new Date(c.last_seen.replace(' ', 'T') + 'Z').getTime()
+  return Date.now() - last < 3 * 60 * 1000
+}
+
+async function loadCollectors() {
+  try {
+    const r = await api.getCollectors()
+    collectors.value = r.data
+  } catch { /* ignore */ }
+}
+
+async function pauseCol(row) {
+  await api.pauseCollector(row.machine_id)
+  ElMessage.success(`${row.name} 已暂停`)
+  await loadCollectors()
+}
+
+async function resumeCol(row) {
+  await api.resumeCollector(row.machine_id)
+  ElMessage.success(`${row.name} 已继续`)
+  await loadCollectors()
+}
+
+async function removeCol(row) {
+  await api.deleteCollector(row.id)
+  ElMessage.success(`${row.name} 已移除`)
+  await loadCollectors()
+}
 const gitRepos = ref([])
 const newRepo = ref({ path: '', author_email: '' })
 
@@ -362,7 +556,29 @@ async function saveAll() {
   ElMessage.success('Settings saved')
 }
 
-onMounted(() => { loadSettings(); loadGitRepos(); loadDefaultPrompts() })
+async function loadRecycled() {
+  try { const res = await api.getRecycledActivities(); recycledItems.value = res.data } catch {}
+}
+
+async function restoreDate(date) {
+  await api.restoreActivities(date)
+  ElMessage.success(`${date} 的记录已恢复`)
+  await loadRecycled()
+}
+
+async function purgeDate(date) {
+  await api.purgeActivities(date)
+  ElMessage.success(`${date} 的记录已永久删除`)
+  await loadRecycled()
+}
+
+async function purgeAll() {
+  await api.purgeAllActivities()
+  ElMessage.success('回收站已清空')
+  recycledItems.value = []
+}
+
+onMounted(() => { loadSettings(); loadGitRepos(); loadDefaultPrompts(); loadRecycled(); loadCollectors() })
 </script>
 
 <style scoped>
@@ -481,4 +697,26 @@ onMounted(() => { loadSettings(); loadGitRepos(); loadDefaultPrompts() })
   padding-top: 24px;
   border-top: 1px solid var(--border);
 }
+
+.collector-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 10px;
+  border-radius: 980px;
+}
+.collector-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.collector-status.online { background: #e8f5e9; color: #2e7d32; }
+.collector-status.online::before { background: #34c759; }
+.collector-status.offline { background: #f5f5f7; color: #86868b; }
+.collector-status.offline::before { background: #aeaeb2; }
+.collector-status.paused { background: #fff3e0; color: #e65100; }
+.collector-status.paused::before { background: #ff9f0a; }
 </style>

@@ -166,12 +166,20 @@ onMounted(loadData)
   padding: 8px 0;
 }
 
+.breakdown-info {
+  width: 140px;
+  flex-shrink: 0;
+}
+
 .breakdown-category {
+  display: block;
   font-size: 14px;
   font-weight: 500;
   color: var(--text-primary);
-  width: 100px;
   text-transform: capitalize;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .breakdown-bar-wrapper {

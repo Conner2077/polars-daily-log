@@ -22,7 +22,7 @@ class WorklogSummarizer:
             "SELECT * FROM jira_issues WHERE is_active = 1"
         )
         activities = await self._db.fetch_all(
-            "SELECT * FROM activities WHERE date(timestamp) = ?", (target_date,)
+            "SELECT * FROM activities WHERE date(timestamp) = ? AND deleted_at IS NULL", (target_date,)
         )
         commits = await self._db.fetch_all(
             "SELECT * FROM git_commits WHERE date = ?", (target_date,)
@@ -63,44 +63,45 @@ class WorklogSummarizer:
             (target_date,),
         )
 
-        drafts = []
+        # Build JSON array of all issue entries
+        issue_entries = []
+        total_time_sec = 0
         for item in parsed:
             time_spent_sec = int(item["time_spent_hours"] * 3600)
-
-            activity_ids = [
-                a["id"] for a in activities
-                if self._activity_matches_issue(a, item["issue_key"], issues)
-            ]
-            commit_ids = [c["id"] for c in commits]
-
-            draft_id = await self._db.execute(
-                """INSERT INTO worklog_drafts
-                   (date, issue_key, time_spent_sec, summary, raw_activities, raw_commits, status)
-                   VALUES (?, ?, ?, ?, ?, ?, 'pending_review')""",
-                (
-                    target_date,
-                    item["issue_key"],
-                    time_spent_sec,
-                    item["summary"],
-                    json.dumps(activity_ids),
-                    json.dumps(commit_ids),
-                ),
-            )
-
-            await self._db.execute(
-                """INSERT INTO audit_logs (draft_id, action, after_snapshot)
-                   VALUES (?, 'created', ?)""",
-                (draft_id, json.dumps(item, ensure_ascii=False)),
-            )
-
-            drafts.append({
-                "id": draft_id,
+            total_time_sec += time_spent_sec
+            issue_entries.append({
                 "issue_key": item["issue_key"],
-                "time_spent_sec": time_spent_sec,
+                "time_spent_hours": item["time_spent_hours"],
                 "summary": item["summary"],
+                "jira_worklog_id": None,
             })
 
-        return drafts
+        activity_ids = [a["id"] for a in activities]
+        commit_ids = [c["id"] for c in commits]
+
+        # Insert ONE record per day with all issues in summary JSON
+        summary_json = json.dumps(issue_entries, ensure_ascii=False)
+        draft_id = await self._db.execute(
+            """INSERT INTO worklog_drafts
+               (date, issue_key, time_spent_sec, summary, raw_activities, raw_commits, status)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending_review')""",
+            (
+                target_date,
+                "DAILY",
+                total_time_sec,
+                summary_json,
+                json.dumps(activity_ids),
+                json.dumps(commit_ids),
+            ),
+        )
+
+        await self._db.execute(
+            """INSERT INTO audit_logs (draft_id, action, after_snapshot)
+               VALUES (?, 'created', ?)""",
+            (draft_id, summary_json),
+        )
+
+        return [{"id": draft_id, "issue_key": "DAILY", "time_spent_sec": total_time_sec, "summary": summary_json}]
 
     def _compress_activities(self, activities: list[dict]) -> str:
         """Compress raw activities into a concise summary for LLM prompt.

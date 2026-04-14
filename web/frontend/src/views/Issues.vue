@@ -31,9 +31,19 @@
         </el-table-column>
         <el-table-column label="" width="80" align="center">
           <template #default="{ row }">
-            <el-button type="danger" size="small" text @click="deleteIssue(row.issue_key)">
-              <el-icon><Delete /></el-icon>
-            </el-button>
+            <el-popconfirm
+              :title="`删除 ${row.issue_key}？`"
+              confirm-button-text="删除"
+              cancel-button-text="取消"
+              :width="220"
+              @confirm="confirmDelete(row.issue_key)"
+            >
+              <template #reference>
+                <el-button size="small" text style="color: #c0c4cc">
+                  <el-icon><Delete /></el-icon>
+                </el-button>
+              </template>
+            </el-popconfirm>
           </template>
         </el-table-column>
       </el-table>
@@ -115,9 +125,8 @@ async function addIssue() {
 
 async function toggleActive(row) { await api.updateIssue(row.issue_key, { is_active: row.is_active }) }
 
-async function deleteIssue(key) {
-  await ElMessageBox.confirm(`Delete issue ${key}?`, 'Confirm')
-  await api.deleteIssue(key); ElMessage.success('Deleted'); await loadIssues()
+async function confirmDelete(key) {
+  await api.deleteIssue(key); ElMessage.success('已删除'); await loadIssues()
 }
 
 onMounted(loadIssues)

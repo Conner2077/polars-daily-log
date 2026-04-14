@@ -83,6 +83,21 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT,
     updated_at TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS collectors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    machine_id TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    hostname TEXT,
+    platform TEXT,
+    platform_detail TEXT,
+    capabilities TEXT,
+    token_hash TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    last_seen TEXT,
+    is_active INTEGER DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_collectors_machine ON collectors(machine_id);
 """
 
 
@@ -128,6 +143,7 @@ class Database:
 
     async def _migrate(self) -> None:
         """Add columns that may be missing from older schema versions."""
+        # worklog_drafts migrations
         columns = await self.fetch_all("PRAGMA table_info(worklog_drafts)")
         col_names = {c["name"] for c in columns}
         migrations = [
@@ -138,6 +154,35 @@ class Database:
         for col, sql in migrations:
             if col not in col_names:
                 await self._conn.execute(sql)
+
+        # activities migrations
+        act_cols = await self.fetch_all("PRAGMA table_info(activities)")
+        act_col_names = {c["name"] for c in act_cols}
+        if "deleted_at" not in act_col_names:
+            await self._conn.execute("ALTER TABLE activities ADD COLUMN deleted_at TEXT")
+            await self._conn.execute("CREATE INDEX IF NOT EXISTS idx_activities_deleted ON activities(deleted_at)")
+        if "machine_id" not in act_col_names:
+            # Existing rows get 'local' as machine_id
+            await self._conn.execute("ALTER TABLE activities ADD COLUMN machine_id TEXT DEFAULT 'local'")
+            await self._conn.execute("UPDATE activities SET machine_id = 'local' WHERE machine_id IS NULL")
+            await self._conn.execute("CREATE INDEX IF NOT EXISTS idx_activities_machine ON activities(machine_id)")
+
+        # git_commits migrations
+        commit_cols = await self.fetch_all("PRAGMA table_info(git_commits)")
+        commit_col_names = {c["name"] for c in commit_cols}
+        if "machine_id" not in commit_col_names:
+            await self._conn.execute("ALTER TABLE git_commits ADD COLUMN machine_id TEXT DEFAULT 'local'")
+            await self._conn.execute("UPDATE git_commits SET machine_id = 'local' WHERE machine_id IS NULL")
+            await self._conn.execute("CREATE INDEX IF NOT EXISTS idx_commits_machine ON git_commits(machine_id)")
+
+        # collectors migrations for Phase 3 (remote config + pause)
+        col_cols = await self.fetch_all("PRAGMA table_info(collectors)")
+        col_col_names = {c["name"] for c in col_cols}
+        if "config_override" not in col_col_names:
+            await self._conn.execute("ALTER TABLE collectors ADD COLUMN config_override TEXT")
+        if "is_paused" not in col_col_names:
+            await self._conn.execute("ALTER TABLE collectors ADD COLUMN is_paused INTEGER DEFAULT 0")
+
         await self._conn.commit()
 
     async def close(self) -> None:

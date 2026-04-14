@@ -4,6 +4,11 @@
       <h2>Activities</h2>
     </div>
 
+    <!-- Machine filter (hidden when only one collector) -->
+    <div v-if="hasMultipleMachines" class="machine-filter-row">
+      <MachineSelector v-model="selectedMachine" @change="onMachineChange" ref="machineSel" />
+    </div>
+
     <!-- Search Section -->
     <div class="search-section">
       <div class="search-bar">
@@ -90,13 +95,14 @@
                 {{ viewMode === 'table' ? 'Timeline' : 'Table' }}
               </el-button>
               <el-popconfirm
-                title="Delete all records for this date?"
-                confirm-button-text="Delete"
-                cancel-button-text="Cancel"
+                title="移入回收站？可在 Settings 中恢复"
+                confirm-button-text="移入回收站"
+                cancel-button-text="取消"
+                :width="280"
                 @confirm="deleteAllForDate"
               >
                 <template #reference>
-                  <el-button size="small" type="danger" round>Delete All</el-button>
+                  <el-button size="small" round class="danger-btn">移入回收站</el-button>
                 </template>
               </el-popconfirm>
             </div>
@@ -134,7 +140,7 @@
               </el-table-column>
               <el-table-column label="" width="50">
                 <template #default="{ row }">
-                  <el-popconfirm title="Delete?" @confirm="deleteOne(row.id)">
+                  <el-popconfirm title="移入回收站？" :width="220" @confirm="deleteOne(row.id)">
                     <template #reference>
                       <el-button size="small" text style="color: #c0c4cc">
                         <el-icon><Delete /></el-icon>
@@ -169,9 +175,9 @@
                         style="width: 60px; height: 40px; object-fit: cover; border-radius: 4px; cursor: pointer;"
                         @click="showPreview(row)"
                       />
-                      <el-popconfirm title="Delete?" @confirm="deleteOne(row.id)">
+                      <el-popconfirm title="移入回收站？" :width="220" @confirm="deleteOne(row.id)">
                         <template #reference>
-                          <el-button size="small" text type="danger">
+                          <el-button size="small" text style="color: #c0c4cc">
                             <el-icon><Delete /></el-icon>
                           </el-button>
                         </template>
@@ -218,11 +224,15 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
+import MachineSelector from '../components/MachineSelector.vue'
 
 const dates = ref([])
 const selectedDate = ref(null)
+const selectedMachine = ref(null)
 const activities = ref([])
 const viewMode = ref('table')
+const machineSel = ref(null)
+const hasMultipleMachines = ref(false)
 
 // Search refs
 const searchQuery = ref('')
@@ -242,29 +252,48 @@ const totalHours = computed(() => {
 })
 
 async function loadDates() {
-  const res = await api.getActivityDates()
+  const res = await api.getActivityDates(selectedMachine.value)
   dates.value = res.data
   if (dates.value.length > 0 && !selectedDate.value) {
+    selectDate(dates.value[0].date)
+  } else if (dates.value.length === 0) {
+    selectedDate.value = null
+    activities.value = []
+  } else if (selectedDate.value && !dates.value.find(d => d.date === selectedDate.value)) {
+    // Current selected date no longer has records for this machine
     selectDate(dates.value[0].date)
   }
 }
 
 async function selectDate(d) {
   selectedDate.value = d
-  const res = await api.getActivities(d)
+  const res = await api.getActivities(d, selectedMachine.value)
   activities.value = res.data
+}
+
+async function onMachineChange() {
+  selectedDate.value = null
+  await loadDates()
+}
+
+// Sync hasMultipleMachines from collector list
+async function probeMachines() {
+  try {
+    const r = await api.getCollectors()
+    hasMultipleMachines.value = r.data.length > 1
+  } catch { /* ignore */ }
 }
 
 async function deleteOne(id) {
   await api.deleteActivity(id)
-  ElMessage.success('Deleted')
+  ElMessage.success('已移入回收站')
   await selectDate(selectedDate.value)
   await loadDates()
 }
 
 async function deleteAllForDate() {
   await api.deleteActivitiesByDate(selectedDate.value)
-  ElMessage.success(`All records for ${selectedDate.value} deleted`)
+  ElMessage.success(`${selectedDate.value} 的记录已移入回收站`)
   selectedDate.value = null
   activities.value = []
   await loadDates()
@@ -337,7 +366,7 @@ async function doSearch() {
   }
 }
 
-onMounted(loadDates)
+onMounted(() => { loadDates(); probeMachines() })
 </script>
 
 <style scoped>
@@ -347,7 +376,11 @@ onMounted(loadDates)
 }
 
 .page-header {
-  margin-bottom: 24px;
+  margin-bottom: 16px;
+}
+
+.machine-filter-row {
+  margin-bottom: 20px;
 }
 
 .search-section {

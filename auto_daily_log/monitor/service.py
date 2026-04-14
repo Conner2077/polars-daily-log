@@ -12,14 +12,19 @@ from .screenshot import capture_screenshot
 from .ocr import ocr_image
 from .phash import compute_phash, is_similar
 from .idle import get_idle_seconds
+from .watchdog import MonitorTrace
+
+# Apps that may self-exit when screen capture is detected (anti-leak protection)
+_SCREEN_CAPTURE_HOSTILE_APPS = {"wechat", "wecom", "企业微信", "微信", "wechatwork", "wxwork"}
 
 
 class MonitorService:
-    def __init__(self, db: Database, config: MonitorConfig, screenshot_dir: Path):
+    def __init__(self, db: Database, config: MonitorConfig, screenshot_dir: Path, trace: Optional[MonitorTrace] = None):
         self._db = db
         self._config = config
         self._screenshot_dir = screenshot_dir
         self._platform = get_platform_module()
+        self._trace = trace or MonitorTrace()
         self._last_app: Optional[str] = None
         self._last_title: Optional[str] = None
         self._last_id: Optional[int] = None
@@ -28,13 +33,50 @@ class MonitorService:
         self._last_was_idle: bool = False
         self._running = False
 
-    def _capture_raw_inner(self) -> dict:
-        app_name = self._platform.get_frontmost_app()
-        window_title = self._platform.get_window_title(app_name) if app_name else None
-        tab_title, url = (
-            self._platform.get_browser_tab(app_name) if app_name else (None, None)
+    @property
+    def trace(self) -> MonitorTrace:
+        return self._trace
+
+    async def _get_runtime_config(self) -> dict:
+        """Read latest monitor settings from DB, fallback to config.yaml values."""
+        rows = await self._db.fetch_all(
+            "SELECT key, value FROM settings WHERE key IN "
+            "('monitor_ocr_enabled', 'monitor_ocr_engine', 'monitor_interval_sec')"
         )
-        wecom_group = self._platform.get_wecom_chat_name(app_name) if app_name else None
+        s = {r["key"]: r["value"] for r in rows}
+
+        def _bool(val, default):
+            if val is None:
+                return default
+            return str(val).lower() in ("true", "1", "yes", "on")
+
+        return {
+            "ocr_enabled": _bool(s.get("monitor_ocr_enabled"), self._config.ocr_enabled),
+            "ocr_engine": s.get("monitor_ocr_engine") or self._config.ocr_engine,
+            "interval_sec": int(s.get("monitor_interval_sec") or self._config.interval_sec),
+        }
+
+    def _capture_raw_inner(self) -> dict:
+        self._trace.log("get_frontmost_app")
+        app_name = self._platform.get_frontmost_app()
+        self._trace.log("got_frontmost", app=app_name)
+
+        window_title = None
+        if app_name:
+            self._trace.log("get_window_title", app=app_name)
+            window_title = self._platform.get_window_title(app_name)
+            self._trace.log("got_window_title", app=app_name, title=window_title)
+
+        tab_title, url = (None, None)
+        if app_name:
+            self._trace.log("get_browser_tab", app=app_name)
+            tab_title, url = self._platform.get_browser_tab(app_name)
+
+        wecom_group = None
+        if app_name:
+            self._trace.log("get_wecom_chat_name", app=app_name)
+            wecom_group = self._platform.get_wecom_chat_name(app_name)
+
         return {
             "app_name": app_name,
             "window_title": tab_title or window_title,
@@ -42,7 +84,7 @@ class MonitorService:
             "wecom_group": wecom_group,
         }
 
-    def _capture_raw(self) -> dict:
+    def _capture_raw(self, ocr_enabled: bool, ocr_engine: str) -> dict:
         raw = self._capture_raw_inner()
 
         screenshot_path = None
@@ -54,8 +96,16 @@ class MonitorService:
         same_window = (app == self._last_app and title == self._last_title
                        and self._last_app is not None)
 
-        if self._config.ocr_enabled and not same_window:
+        # Skip screenshot if frontmost app is hostile to screen capture
+        # DEBUG MODE: set to False to disable protection and reproduce crash
+        import os
+        _debug_no_skip = os.environ.get("ADL_DEBUG_NO_SKIP") == "1"
+        app_lower = (app or "").lower()
+        skip_screenshot = (not _debug_no_skip) and (app_lower in _SCREEN_CAPTURE_HOSTILE_APPS)
+
+        if ocr_enabled and not same_window and not skip_screenshot:
             today_dir = self._screenshot_dir / datetime.now().strftime("%Y-%m-%d")
+            self._trace.log("capture_screenshot", app=app, title=title)
             screenshot_path = capture_screenshot(today_dir)
             if screenshot_path:
                 if self._config.phash_enabled:
@@ -69,11 +119,14 @@ class MonitorService:
                             pass
                         screenshot_path = None
                     else:
-                        ocr_text = ocr_image(screenshot_path, self._config.ocr_engine)
+                        ocr_text = ocr_image(screenshot_path, ocr_engine)
                         self._last_phash = current_hash
                         self._last_ocr_text = ocr_text
                 else:
-                    ocr_text = ocr_image(screenshot_path, self._config.ocr_engine)
+                    ocr_text = ocr_image(screenshot_path, ocr_engine)
+        elif skip_screenshot and ocr_enabled:
+            # Hostile app frontmost — skip screenshot entirely
+            self._trace.log("skip_screenshot_hostile", app=app)
         elif same_window:
             # Same window — reuse last OCR text, no screenshot
             ocr_text = self._last_ocr_text
@@ -94,6 +147,9 @@ class MonitorService:
         return False
 
     async def sample_once(self) -> None:
+        rt = await self._get_runtime_config()
+        interval_sec = rt["interval_sec"]
+
         idle_sec = get_idle_seconds()
         is_idle = idle_sec >= self._config.idle_threshold_sec
 
@@ -101,15 +157,16 @@ class MonitorService:
             if self._last_was_idle and self._last_id:
                 await self._db.execute(
                     "UPDATE activities SET duration_sec = duration_sec + ? WHERE id = ?",
-                    (self._config.interval_sec, self._last_id),
+                    (interval_sec, self._last_id),
                 )
                 return
 
             row_id = await self._db.execute(
                 """INSERT INTO activities
-                   (timestamp, app_name, window_title, category, confidence, duration_sec)
-                   VALUES (?, ?, ?, 'idle', 0.99, ?)""",
-                (datetime.now().isoformat(), "System", "Idle", self._config.interval_sec),
+                   (timestamp, app_name, window_title, category, confidence,
+                    duration_sec, machine_id)
+                   VALUES (?, ?, ?, 'idle', 0.99, ?, ?)""",
+                (datetime.now().isoformat(), "System", "Idle", interval_sec, "local"),
             )
             self._last_app = None
             self._last_title = None
@@ -119,7 +176,7 @@ class MonitorService:
 
         self._last_was_idle = False
 
-        raw = self._capture_raw()
+        raw = self._capture_raw(rt["ocr_enabled"], rt["ocr_engine"])
         if not raw["app_name"] or self._is_blocked(raw):
             return
 
@@ -129,7 +186,7 @@ class MonitorService:
         if app_name == self._last_app and window_title == self._last_title and self._last_id:
             await self._db.execute(
                 "UPDATE activities SET duration_sec = duration_sec + ? WHERE id = ?",
-                (self._config.interval_sec, self._last_id),
+                (interval_sec, self._last_id),
             )
             return
 
@@ -145,8 +202,9 @@ class MonitorService:
 
         row_id = await self._db.execute(
             """INSERT INTO activities
-               (timestamp, app_name, window_title, category, confidence, url, signals, duration_sec)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (timestamp, app_name, window_title, category, confidence,
+                url, signals, duration_sec, machine_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 datetime.now().isoformat(),
                 app_name,
@@ -155,7 +213,8 @@ class MonitorService:
                 confidence,
                 raw["url"],
                 json.dumps(signals, ensure_ascii=False),
-                self._config.interval_sec,
+                interval_sec,
+                "local",  # built-in collector uses fixed machine_id
             ),
         )
 
@@ -170,7 +229,9 @@ class MonitorService:
                 await self.sample_once()
             except Exception as e:
                 print(f"[Monitor] Error: {e}")
-            await asyncio.sleep(self._config.interval_sec)
+            # Read interval dynamically so settings UI changes take effect
+            rt = await self._get_runtime_config()
+            await asyncio.sleep(rt["interval_sec"])
 
     def stop(self) -> None:
         self._running = False

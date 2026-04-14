@@ -69,6 +69,7 @@
 
     <!-- Log cards -->
     <div v-for="draft in drafts" :key="draft.id" class="log-card">
+      <!-- Card header -->
       <div class="log-header">
         <div style="display: flex; align-items: center; gap: 8px">
           <span :class="['tag-pill', `tag-${draft.tag || 'daily'}`]">{{ tagLabel(draft.tag) }}</span>
@@ -77,47 +78,92 @@
               ? `${draft.period_start} ~ ${draft.period_end}`
               : draft.date }}
           </span>
-          <span v-if="draft.tag === 'daily' || !draft.tag" class="log-issue">{{ draft.issue_key }}</span>
-          <span v-if="draft.tag === 'daily' && draft.status !== 'archived'" :class="['status-pill', `status-${draft.status}`]">
+          <span v-if="isDailyTag(draft)" :class="['status-pill', `status-${draft.status}`]">
             {{ statusLabel(draft.status) }}
           </span>
           <span v-if="draft.user_edited" style="font-size: 11px; color: var(--text-tertiary, #aeaeb2)">(已编辑)</span>
         </div>
-        <div class="log-hours">
-          {{ (draft.time_spent_sec / 3600).toFixed(1) }}h
+        <div style="display: flex; align-items: center; gap: 12px">
+          <div class="log-hours">
+            {{ (draft.time_spent_sec / 3600).toFixed(1) }}h
+          </div>
         </div>
       </div>
 
-      <div v-if="editingId === draft.id" class="log-edit">
-        <div style="margin-bottom: 12px">
-          <label style="font-size: 13px; color: var(--text-secondary, #86868b); margin-bottom: 4px; display: block">Jira Issue Key</label>
-          <el-input v-model="editForm.issue_key" placeholder="e.g. PLS-4387" />
-        </div>
-        <div style="margin-bottom: 12px">
-          <label style="font-size: 13px; color: var(--text-secondary, #86868b); margin-bottom: 4px; display: block">工时 (小时)</label>
-          <el-input-number v-model="editForm.hours" :min="0" :step="0.5" :precision="1" />
-        </div>
-        <div style="margin-bottom: 12px">
-          <label style="font-size: 13px; color: var(--text-secondary, #86868b); margin-bottom: 4px; display: block">摘要</label>
-          <el-input v-model="editForm.summary" type="textarea" :rows="3" />
-        </div>
-        <div style="display: flex; gap: 8px">
-          <el-button type="primary" round size="small" @click="saveEdit(draft.id)">保存</el-button>
-          <el-button round size="small" @click="editingId = null">取消</el-button>
-        </div>
-      </div>
-      <div v-else class="log-body">
-        <p style="white-space: pre-wrap">{{ draft.summary }}</p>
-      </div>
+      <!-- Daily log: show per-issue sections -->
+      <template v-if="isDailyTag(draft) && parseIssues(draft.summary)">
+        <div v-for="(issue, idx) in parseIssues(draft.summary)" :key="idx" class="issue-section">
+          <div class="issue-header">
+            <div style="display: flex; align-items: center; gap: 8px">
+              <span class="log-issue">{{ issue.issue_key }}</span>
+              <span v-if="isSkippedIssue(issue.issue_key)" class="skip-hint">（需改为真实 Issue Key 才可提交）</span>
+              <span class="issue-hours">{{ issue.time_spent_hours }}h</span>
+            </div>
+            <div class="issue-actions">
+              <template v-if="draft.status === 'pending_review'">
+                <el-button
+                  v-if="!isSkippedIssue(issue.issue_key)"
+                  type="primary" round size="small"
+                  @click="approveAndSubmitIssue(draft.id, idx)"
+                  :loading="submittingIssue === `${draft.id}-${idx}`"
+                >通过并提交</el-button>
+                <el-button
+                  v-if="editingIssue !== `${draft.id}-${idx}`"
+                  round size="small"
+                  @click="startIssueEdit(draft.id, idx, issue)"
+                >编辑</el-button>
+              </template>
+              <template v-if="(draft.status === 'approved' || draft.status === 'auto_approved') && !issue.jira_worklog_id">
+                <el-button
+                  v-if="!isSkippedIssue(issue.issue_key)"
+                  type="primary" round size="small"
+                  :loading="submittingIssue === `${draft.id}-${idx}`"
+                  @click="submitSingleIssue(draft.id, idx)"
+                >提交到 Jira</el-button>
+              </template>
+              <span v-if="issue.jira_worklog_id" class="submitted-badge">已提交</span>
+            </div>
+          </div>
 
-      <!-- Action buttons: ONLY for daily logs -->
-      <div v-if="(draft.tag === 'daily' || !draft.tag) && draft.status === 'pending_review'" class="log-actions">
-        <el-button round size="small" @click="startEdit(draft)">编辑</el-button>
-        <el-button type="primary" round size="small" @click="approve(draft.id)">通过</el-button>
+          <!-- Edit mode for this issue -->
+          <div v-if="editingIssue === `${draft.id}-${idx}`" class="issue-edit">
+            <div style="margin-bottom: 8px">
+              <label class="edit-label">Issue Key</label>
+              <el-input v-model="issueEditForm.issue_key" placeholder="e.g. PLS-4387" size="small" />
+            </div>
+            <div style="margin-bottom: 8px">
+              <label class="edit-label">工时 (小时)</label>
+              <el-input-number v-model="issueEditForm.time_spent_hours" :min="0" :step="0.5" :precision="1" size="small" />
+            </div>
+            <div style="margin-bottom: 8px">
+              <label class="edit-label">摘要</label>
+              <el-input v-model="issueEditForm.summary" type="textarea" :rows="3" />
+            </div>
+            <div style="display: flex; gap: 8px">
+              <el-button type="primary" round size="small" @click="saveIssueEdit(draft.id, idx)">保存</el-button>
+              <el-button round size="small" @click="editingIssue = null">取消</el-button>
+            </div>
+          </div>
+          <div v-else class="issue-body">
+            <p style="white-space: pre-wrap">{{ issue.summary }}</p>
+          </div>
+        </div>
+      </template>
+
+      <!-- Non-daily or fallback: plain text summary -->
+      <template v-else>
+        <div class="log-body">
+          <p style="white-space: pre-wrap">{{ draft.summary }}</p>
+        </div>
+      </template>
+
+      <!-- Card-level action buttons -->
+      <div v-if="isDailyTag(draft) && draft.status === 'pending_review'" class="log-actions">
+        <el-button type="primary" round size="small" @click="approve(draft.id)">一键通过</el-button>
         <el-button type="danger" round size="small" plain @click="reject(draft.id)">驳回</el-button>
       </div>
-      <div v-else-if="(draft.tag === 'daily' || !draft.tag) && (draft.status === 'approved' || draft.status === 'auto_approved')" class="log-actions">
-        <el-button type="primary" round size="small" @click="submit(draft.id)">提交到 Jira</el-button>
+      <div v-else-if="isDailyTag(draft) && (draft.status === 'approved' || draft.status === 'auto_approved')" class="log-actions">
+        <el-button type="primary" round size="small" @click="submitAll(draft.id)">全部提交到 Jira</el-button>
       </div>
       <div v-else-if="draft.status === 'submitted'" class="log-actions">
         <el-button round size="small" @click="showAudit(draft.id)">查看审计记录</el-button>
@@ -142,14 +188,15 @@ import api from '../api'
 
 const selectedDate = ref(new Date().toISOString().split('T')[0])
 const drafts = ref([])
-const editingId = ref(null)
-const editForm = ref({ hours: 0, summary: '' })
+const editingIssue = ref(null)
+const issueEditForm = ref({ issue_key: '', time_spent_hours: 0, summary: '' })
 const auditVisible = ref(false)
 const auditLogs = ref([])
 const activeTag = ref('')
 const customRange = ref(null)
 const generating = ref(false)
 const generatingText = ref('')
+const submittingIssue = ref(null)
 
 const tagFilters = [
   { label: '全部', value: '' },
@@ -172,6 +219,22 @@ function statusLabel(status) {
   return map[status] || status
 }
 
+function isDailyTag(draft) {
+  return draft.tag === 'daily' || !draft.tag
+}
+
+function isSkippedIssue(key) {
+  return ['OTHER', 'ALL', 'DAILY'].includes(key)
+}
+
+function parseIssues(summary) {
+  try {
+    const parsed = JSON.parse(summary)
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed
+  } catch {}
+  return null
+}
+
 async function loadDrafts() {
   if (activeTag.value) {
     const res = await api.getWorklogsByTag(activeTag.value)
@@ -189,7 +252,6 @@ async function filterByTag(tag) {
 
 async function generate(type, startDate = null, endDate = null) {
   try {
-    // Check if same period already exists (before showing loading)
     generatingText.value = '检查是否已有记录...'
     const check = await api.checkPeriodExists(type, startDate, endDate)
     if (check.data.exists) {
@@ -203,7 +265,6 @@ async function generate(type, startDate = null, endDate = null) {
       )
     }
 
-    // Now start generating with loading state
     generating.value = true
     const steps = {
       daily: ['正在采集 Git 提交记录...', '正在分析活动数据...', '正在调用 AI 生成日志...', '正在保存草稿...'],
@@ -246,26 +307,74 @@ async function generateCustom() {
   await generate('custom', customRange.value[0], customRange.value[1])
 }
 
-function startEdit(draft) {
-  editingId.value = draft.id
-  editForm.value = { issue_key: draft.issue_key, hours: draft.time_spent_sec / 3600, summary: draft.summary }
+function startIssueEdit(draftId, idx, issue) {
+  editingIssue.value = `${draftId}-${idx}`
+  issueEditForm.value = {
+    issue_key: issue.issue_key,
+    time_spent_hours: issue.time_spent_hours,
+    summary: issue.summary,
+  }
 }
 
-async function saveEdit(id) {
-  const data = { time_spent_sec: Math.round(editForm.value.hours * 3600), summary: editForm.value.summary }
-  if (editForm.value.issue_key) data.issue_key = editForm.value.issue_key
-  await api.updateDraft(id, data)
-  editingId.value = null
+async function saveIssueEdit(draftId, idx) {
+  await api.updateDraftIssue(draftId, idx, issueEditForm.value)
+  editingIssue.value = null
   ElMessage.success('已更新')
   await loadDrafts()
 }
 
-async function approve(id) { await api.approveDraft(id); ElMessage.success('已通过'); await loadDrafts() }
-async function reject(id) { await api.rejectDraft(id); ElMessage.warning('已驳回'); await loadDrafts() }
+async function approve(id) {
+  await api.approveDraft(id)
+  ElMessage.success('已通过')
+  await loadDrafts()
+}
 
-async function submit(id) {
-  try { await api.submitDraft(id); ElMessage.success('已提交到 Jira'); await loadDrafts() }
-  catch (e) { ElMessage.error('提交失败: ' + (e.response?.data?.detail || e.message)) }
+async function reject(id) {
+  await api.rejectDraft(id)
+  ElMessage.warning('已驳回')
+  await loadDrafts()
+}
+
+async function submitAll(id) {
+  try {
+    await api.submitDraft(id)
+    ElMessage.success('已全部提交到 Jira')
+    await loadDrafts()
+  } catch (e) {
+    ElMessage.error('提交失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+async function approveAndSubmitIssue(draftId, idx) {
+  submittingIssue.value = `${draftId}-${idx}`
+  try {
+    // Approve the whole record first (if still pending)
+    const draft = drafts.value.find(d => d.id === draftId)
+    if (draft && draft.status === 'pending_review') {
+      await api.approveDraft(draftId)
+    }
+    // Then submit this single issue
+    const res = await api.submitIssue(draftId, idx)
+    ElMessage.success(`${res.data.issue_key} 已通过并提交到 Jira`)
+    await loadDrafts()
+  } catch (e) {
+    ElMessage.error('提交失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    submittingIssue.value = null
+  }
+}
+
+async function submitSingleIssue(draftId, idx) {
+  submittingIssue.value = `${draftId}-${idx}`
+  try {
+    const res = await api.submitIssue(draftId, idx)
+    ElMessage.success(`${res.data.issue_key} 已提交到 Jira`)
+    await loadDrafts()
+  } catch (e) {
+    ElMessage.error('提交失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    submittingIssue.value = null
+  }
 }
 
 async function showAudit(id) {
@@ -307,9 +416,6 @@ onMounted(loadDrafts)
   line-height: 1.7;
   color: var(--text-primary, #1d1d1f);
 }
-.log-edit {
-  padding: 16px 20px;
-}
 .log-actions {
   padding: 12px 20px;
   border-top: 1px solid var(--border, rgba(0,0,0,0.06));
@@ -330,6 +436,61 @@ onMounted(loadDrafts)
   font-weight: 600;
   color: var(--accent, #0071e3);
 }
+
+/* Issue sections within a daily card */
+.issue-section {
+  border-bottom: 1px solid var(--border, rgba(0,0,0,0.04));
+}
+.issue-section:last-child {
+  border-bottom: none;
+}
+.issue-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 20px 0;
+}
+.issue-hours {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary, #86868b);
+}
+.issue-body {
+  padding: 4px 20px 12px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-primary, #1d1d1f);
+}
+.issue-edit {
+  padding: 8px 20px 12px;
+}
+.edit-label {
+  font-size: 13px;
+  color: var(--text-secondary, #86868b);
+  margin-bottom: 4px;
+  display: block;
+}
+.issue-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 180px;
+  flex-shrink: 0;
+}
+.skip-hint {
+  font-size: 11px;
+  color: var(--text-tertiary, #aeaeb2);
+}
+.submitted-badge {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 980px;
+  background: #e8f5e9;
+  color: #2e7d32;
+  font-weight: 500;
+}
+
 .tag-pill {
   font-size: 11px;
   font-weight: 600;

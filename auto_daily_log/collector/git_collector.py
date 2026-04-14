@@ -89,11 +89,12 @@ class GitCollector:
 
             await self._db.execute(
                 """INSERT INTO git_commits
-                   (repo_id, hash, message, author, committed_at, files_changed, insertions, deletions, date)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (repo_id, hash, message, author, committed_at,
+                    files_changed, insertions, deletions, date, machine_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     repo_id, commit_hash, message, author, committed_at,
-                    json.dumps(files), insertions, deletions, date_str,
+                    json.dumps(files), insertions, deletions, date_str, "local",
                 ),
             )
             count += 1

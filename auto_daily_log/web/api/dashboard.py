@@ -4,12 +4,26 @@ from fastapi import APIRouter, Request, Query
 router = APIRouter(tags=["dashboard"])
 
 @router.get("/dashboard")
-async def get_dashboard(request: Request, target_date: str = Query(default=None)):
+async def get_dashboard(
+    request: Request,
+    target_date: str = Query(default=None),
+    machine_id: str = Query(default=None),
+):
     db = request.app.state.db
     target = target_date or date.today().isoformat()
-    activities = await db.fetch_all(
-        "SELECT category, SUM(duration_sec) as total_sec FROM activities WHERE date(timestamp) = ? GROUP BY category", (target,)
-    )
+    if machine_id:
+        activities = await db.fetch_all(
+            "SELECT category, SUM(duration_sec) as total_sec FROM activities "
+            "WHERE date(timestamp) = ? AND machine_id = ? AND deleted_at IS NULL "
+            "GROUP BY category",
+            (target, machine_id),
+        )
+    else:
+        activities = await db.fetch_all(
+            "SELECT category, SUM(duration_sec) as total_sec FROM activities "
+            "WHERE date(timestamp) = ? AND deleted_at IS NULL GROUP BY category",
+            (target,),
+        )
     pending = await db.fetch_all(
         "SELECT COUNT(*) as count FROM worklog_drafts WHERE date = ? AND status = 'pending_review'", (target,)
     )

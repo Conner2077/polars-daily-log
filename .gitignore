@@ -12,3 +12,11 @@ screenshots/
 node_modules/
 web/frontend/dist/
 .env
+
+# Collector real config (example is committed; actual user config is not)
+collector.yaml
+# IDE
+.idea/
+.vscode/
+# pytest
+.pytest_cache/

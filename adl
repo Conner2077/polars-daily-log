@@ -1,0 +1,437 @@
+#!/usr/bin/env bash
+# ─── Auto Daily Log — unified CLI ────────────────────────────────────
+# Usage:
+#   ./adl server {start|stop|restart|status|logs [N]}
+#   ./adl collector {start|stop|restart|status|logs [N]}
+#   ./adl {start|stop|restart|status}       # acts on BOTH
+#   ./adl install                            # run installer
+#   ./adl clean                              # remove pid/log files
+# ─────────────────────────────────────────────────────────────────────
+
+set -euo pipefail
+
+# ─── Paths & config ──────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="$SCRIPT_DIR/.venv"
+STATE_DIR="${ADL_STATE_DIR:-$HOME/.auto_daily_log}"
+PID_DIR="$STATE_DIR/pids"
+LOG_DIR="$STATE_DIR/logs"
+mkdir -p "$PID_DIR" "$LOG_DIR"
+
+SERVER_CONFIG="${ADL_SERVER_CONFIG:-$SCRIPT_DIR/config.yaml}"
+COLLECTOR_CONFIG="${ADL_COLLECTOR_CONFIG:-$SCRIPT_DIR/collector.yaml}"
+SERVER_PORT="${ADL_SERVER_PORT:-8888}"
+
+SERVER_PIDFILE="$PID_DIR/server.pid"
+SERVER_LOG="$LOG_DIR/server.log"
+COLLECTOR_PIDFILE="$PID_DIR/collector.pid"
+COLLECTOR_LOG="$LOG_DIR/collector.log"
+
+# ─── Colors ──────────────────────────────────────────────────────────
+if [[ -t 1 ]]; then
+    RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
+    BLUE=$'\033[0;34m'; BOLD=$'\033[1m'; DIM=$'\033[2m'; NC=$'\033[0m'
+else
+    RED=""; GREEN=""; YELLOW=""; BLUE=""; BOLD=""; DIM=""; NC=""
+fi
+
+ok()   { echo "${GREEN}✓${NC} $1"; }
+warn() { echo "${YELLOW}!${NC} $1"; }
+err()  { echo "${RED}✗${NC} $1" >&2; }
+info() { echo "${BLUE}→${NC} $1"; }
+
+# ─── Venv activation ─────────────────────────────────────────────────
+activate_venv() {
+    if [[ ! -f "$VENV_DIR/bin/activate" ]]; then
+        err "Virtual env not found at $VENV_DIR"
+        err "Run './adl install' first."
+        exit 1
+    fi
+    # shellcheck disable=SC1091
+    source "$VENV_DIR/bin/activate"
+}
+
+# ─── Generic process helpers ─────────────────────────────────────────
+pid_alive() {
+    local pid="$1"
+    [[ -z "$pid" ]] && return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+read_pid() {
+    local pidfile="$1"
+    [[ -f "$pidfile" ]] || return 1
+    local pid
+    pid="$(cat "$pidfile" 2>/dev/null)"
+    [[ -n "$pid" ]] || return 1
+    echo "$pid"
+}
+
+wait_for_port() {
+    local port="$1" timeout="${2:-15}"
+    local deadline=$(( $(date +%s) + timeout ))
+    while (( $(date +%s) < deadline )); do
+        if lsof -ti:"$port" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.3
+    done
+    return 1
+}
+
+process_uptime() {
+    local pid="$1"
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        ps -p "$pid" -o etime= 2>/dev/null | awk '{$1=$1; print}'
+    else
+        ps -p "$pid" -o etime= 2>/dev/null | awk '{$1=$1; print}'
+    fi
+}
+
+# ─── Server subcommands ──────────────────────────────────────────────
+server_start() {
+    if pid="$(read_pid "$SERVER_PIDFILE")" && pid_alive "$pid"; then
+        warn "Server already running (PID $pid)"
+        return 0
+    fi
+
+    [[ -f "$SERVER_CONFIG" ]] || { err "Server config not found: $SERVER_CONFIG"; exit 1; }
+
+    activate_venv
+    info "Starting server on port $SERVER_PORT ..."
+
+    cd "$SCRIPT_DIR"
+    nohup python -u -m auto_daily_log \
+        --config "$SERVER_CONFIG" \
+        --port "$SERVER_PORT" \
+        > "$SERVER_LOG" 2>&1 &
+    local pid=$!
+    echo "$pid" > "$SERVER_PIDFILE"
+
+    if wait_for_port "$SERVER_PORT" 15; then
+        ok "Server started (PID $pid) — http://127.0.0.1:$SERVER_PORT"
+        info "Logs: $SERVER_LOG"
+    else
+        err "Server failed to bind port $SERVER_PORT within 15s. See log:"
+        tail -20 "$SERVER_LOG" >&2
+        kill "$pid" 2>/dev/null || true
+        rm -f "$SERVER_PIDFILE"
+        exit 1
+    fi
+}
+
+kill_tree() {
+    # Kill a parent process and all its descendants (macOS + Linux compatible).
+    local root="$1" sig="${2:-TERM}"
+    [[ -z "$root" ]] && return 0
+    local pids="$root"
+    # Collect children via pgrep -P (works on macOS + Linux)
+    local queue=("$root") current children
+    while ((${#queue[@]} > 0)); do
+        current="${queue[0]}"
+        queue=("${queue[@]:1}")
+        children="$(pgrep -P "$current" 2>/dev/null || true)"
+        for c in $children; do
+            pids="$pids $c"
+            queue+=("$c")
+        done
+    done
+    for p in $pids; do
+        kill -"$sig" "$p" 2>/dev/null || true
+    done
+}
+
+server_stop() {
+    local pid
+    pid="$(read_pid "$SERVER_PIDFILE" 2>/dev/null || true)"
+
+    if [[ -z "$pid" ]] || ! pid_alive "$pid"; then
+        # Fallback: find anything on the port and kill its tree
+        local port_pid
+        port_pid="$(lsof -ti:"$SERVER_PORT" 2>/dev/null | head -1 || true)"
+        if [[ -n "$port_pid" ]]; then
+            warn "PID file stale; killing process tree on port $SERVER_PORT (root PID $port_pid)"
+            kill_tree "$port_pid" TERM
+            sleep 1
+            if lsof -ti:"$SERVER_PORT" >/dev/null 2>&1; then
+                kill_tree "$port_pid" KILL
+            fi
+            rm -f "$SERVER_PIDFILE"
+            ok "Server stopped"
+        else
+            info "Server not running"
+            rm -f "$SERVER_PIDFILE"
+        fi
+        return 0
+    fi
+
+    info "Stopping server (PID $pid) ..."
+    kill_tree "$pid" TERM
+    local waited=0
+    while pid_alive "$pid" && (( waited < 10 )); do
+        sleep 0.5
+        waited=$((waited + 1))
+    done
+    if pid_alive "$pid"; then
+        warn "Server didn't stop gracefully; sending SIGKILL to tree"
+        kill_tree "$pid" KILL
+    fi
+    # Final sweep: anything still on port
+    if lsof -ti:"$SERVER_PORT" >/dev/null 2>&1; then
+        local stragglers
+        stragglers="$(lsof -ti:"$SERVER_PORT" 2>/dev/null || true)"
+        warn "Killing port stragglers: $stragglers"
+        for p in $stragglers; do
+            kill -9 "$p" 2>/dev/null || true
+        done
+    fi
+    rm -f "$SERVER_PIDFILE"
+    ok "Server stopped"
+}
+
+server_status() {
+    local pid
+    if pid="$(read_pid "$SERVER_PIDFILE")" && pid_alive "$pid"; then
+        local uptime
+        uptime="$(process_uptime "$pid")"
+        ok "${BOLD}Server${NC}    PID $pid  |  port $SERVER_PORT  |  uptime $uptime"
+        # Try to hit /api/collectors to confirm it's actually serving
+        if NO_PROXY="*" curl -fsS --max-time 2 "http://127.0.0.1:$SERVER_PORT/api/collectors" >/dev/null 2>&1; then
+            echo "          ${DIM}HTTP OK — http://127.0.0.1:$SERVER_PORT${NC}"
+        else
+            echo "          ${YELLOW}HTTP not responding yet${NC}"
+        fi
+    else
+        echo "${DIM}○${NC}  ${BOLD}Server${NC}    stopped"
+        return 1
+    fi
+}
+
+server_logs() {
+    local n="${1:-50}"
+    [[ -f "$SERVER_LOG" ]] || { err "No server log at $SERVER_LOG"; exit 1; }
+    if [[ "$n" == "-f" ]]; then
+        tail -f "$SERVER_LOG"
+    else
+        tail -n "$n" "$SERVER_LOG"
+    fi
+}
+
+# ─── Collector subcommands ───────────────────────────────────────────
+collector_start() {
+    if pid="$(read_pid "$COLLECTOR_PIDFILE")" && pid_alive "$pid"; then
+        warn "Collector already running (PID $pid)"
+        return 0
+    fi
+
+    [[ -f "$COLLECTOR_CONFIG" ]] || {
+        err "Collector config not found: $COLLECTOR_CONFIG"
+        err "Copy collector.yaml.example → collector.yaml and fill in server_url"
+        exit 1
+    }
+
+    activate_venv
+    info "Starting collector (config: $COLLECTOR_CONFIG) ..."
+
+    cd "$SCRIPT_DIR"
+    nohup python -u -m auto_daily_log_collector \
+        --config "$COLLECTOR_CONFIG" \
+        > "$COLLECTOR_LOG" 2>&1 &
+    local pid=$!
+    echo "$pid" > "$COLLECTOR_PIDFILE"
+
+    # Give it a moment to register
+    sleep 2
+    if pid_alive "$pid"; then
+        ok "Collector started (PID $pid)"
+        info "Logs: $COLLECTOR_LOG"
+    else
+        err "Collector exited immediately. See log:"
+        tail -20 "$COLLECTOR_LOG" >&2
+        rm -f "$COLLECTOR_PIDFILE"
+        exit 1
+    fi
+}
+
+collector_stop() {
+    local pid
+    if ! pid="$(read_pid "$COLLECTOR_PIDFILE")" || ! pid_alive "$pid"; then
+        info "Collector not running"
+        rm -f "$COLLECTOR_PIDFILE"
+        return 0
+    fi
+
+    info "Stopping collector (PID $pid) ..."
+    kill_tree "$pid" TERM
+    local waited=0
+    while pid_alive "$pid" && (( waited < 10 )); do
+        sleep 0.5
+        waited=$((waited + 1))
+    done
+    if pid_alive "$pid"; then
+        warn "Collector didn't stop gracefully; sending SIGKILL to tree"
+        kill_tree "$pid" KILL
+    fi
+    rm -f "$COLLECTOR_PIDFILE"
+    ok "Collector stopped"
+}
+
+collector_status() {
+    local pid
+    if pid="$(read_pid "$COLLECTOR_PIDFILE")" && pid_alive "$pid"; then
+        local uptime
+        uptime="$(process_uptime "$pid")"
+        ok "${BOLD}Collector${NC} PID $pid  |  uptime $uptime  |  config $(basename "$COLLECTOR_CONFIG")"
+    else
+        echo "${DIM}○${NC}  ${BOLD}Collector${NC} stopped"
+        return 1
+    fi
+}
+
+collector_logs() {
+    local n="${1:-50}"
+    [[ -f "$COLLECTOR_LOG" ]] || { err "No collector log at $COLLECTOR_LOG"; exit 1; }
+    if [[ "$n" == "-f" ]]; then
+        tail -f "$COLLECTOR_LOG"
+    else
+        tail -n "$n" "$COLLECTOR_LOG"
+    fi
+}
+
+collector_uninstall() {
+    [[ -f "$COLLECTOR_CONFIG" ]] || { err "Collector config not found: $COLLECTOR_CONFIG"; exit 1; }
+    activate_venv
+    # Stop first
+    collector_stop || true
+    info "Running collector uninstall ..."
+    cd "$SCRIPT_DIR"
+    python -m auto_daily_log_collector --config "$COLLECTOR_CONFIG" --uninstall
+    ok "Collector uninstalled"
+}
+
+# ─── Combined subcommands ────────────────────────────────────────────
+all_start() {
+    server_start
+    if [[ -f "$COLLECTOR_CONFIG" ]]; then
+        collector_start
+    else
+        info "No collector.yaml found — only server started"
+    fi
+}
+
+all_stop() {
+    collector_stop || true
+    server_stop || true
+}
+
+all_status() {
+    server_status || true
+    if [[ -f "$COLLECTOR_CONFIG" ]]; then
+        collector_status || true
+    fi
+}
+
+# ─── Install / clean ─────────────────────────────────────────────────
+do_install() {
+    bash "$SCRIPT_DIR/install.sh"
+}
+
+do_clean() {
+    info "Removing pid & log files ..."
+    rm -f "$SERVER_PIDFILE" "$COLLECTOR_PIDFILE"
+    rm -f "$SERVER_LOG" "$COLLECTOR_LOG"
+    ok "Cleaned $STATE_DIR/{pids,logs}/"
+}
+
+# ─── Usage ───────────────────────────────────────────────────────────
+usage() {
+    cat <<EOF
+${BOLD}Auto Daily Log — CLI${NC}
+
+${BOLD}USAGE${NC}
+  ./adl <component> <action> [options]
+  ./adl <action>                 (applies to both server + collector)
+
+${BOLD}COMPONENTS${NC}
+  server       the central web server
+  collector    the local activity collector
+
+${BOLD}ACTIONS${NC}
+  start        start the process (daemon)
+  stop         stop the process
+  restart      stop + start
+  status       show PID, uptime, health
+  logs [N]     show last N lines (default 50); pass -f to tail follow
+
+${BOLD}TOP-LEVEL${NC}
+  start        start both server & collector
+  stop         stop both
+  restart      stop both + start both
+  status       status of both
+  install      run install.sh
+  clean        remove pid / log files
+  help         show this message
+
+${BOLD}COLLECTOR EXTRAS${NC}
+  ./adl collector uninstall      deregister on server + wipe local state
+
+${BOLD}ENV OVERRIDES${NC}
+  ADL_SERVER_PORT=8888           server listen port
+  ADL_SERVER_CONFIG=...          path to config.yaml
+  ADL_COLLECTOR_CONFIG=...       path to collector.yaml
+  ADL_STATE_DIR=~/.auto_daily_log  where pid/log live
+
+${BOLD}EXAMPLES${NC}
+  ./adl start                    start everything
+  ./adl server logs -f           tail server log
+  ./adl collector status
+  ADL_SERVER_PORT=9000 ./adl server start
+EOF
+}
+
+# ─── Dispatcher ──────────────────────────────────────────────────────
+main() {
+    local cmd="${1:-help}"
+    shift || true
+
+    case "$cmd" in
+        server)
+            local action="${1:-status}"; shift || true
+            case "$action" in
+                start)   server_start ;;
+                stop)    server_stop ;;
+                restart) server_stop; server_start ;;
+                status)  server_status ;;
+                logs)    server_logs "${1:-50}" ;;
+                *)       err "Unknown server action: $action"; exit 2 ;;
+            esac
+            ;;
+        collector)
+            local action="${1:-status}"; shift || true
+            case "$action" in
+                start)     collector_start ;;
+                stop)      collector_stop ;;
+                restart)   collector_stop; collector_start ;;
+                status)    collector_status ;;
+                logs)      collector_logs "${1:-50}" ;;
+                uninstall) collector_uninstall ;;
+                *)         err "Unknown collector action: $action"; exit 2 ;;
+            esac
+            ;;
+        start)    all_start ;;
+        stop)     all_stop ;;
+        restart)  all_stop; sleep 1; all_start ;;
+        status)   all_status ;;
+        install)  do_install ;;
+        clean)    do_clean ;;
+        help|-h|--help) usage ;;
+        *)
+            err "Unknown command: $cmd"
+            echo ""
+            usage
+            exit 2
+            ;;
+    esac
+}
+
+main "$@"

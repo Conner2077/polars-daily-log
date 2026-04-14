@@ -1,0 +1,27 @@
+# Auto Daily Log Collector config
+# Copy to collector.yaml and fill in your server URL.
+# Credentials (machine_id + token) are persisted separately after first registration.
+
+# Server connection
+server_url: "http://127.0.0.1:8080"
+name: "My-Mac"   # defaults to hostname if omitted
+
+# Sampling
+interval_sec: 30
+ocr_enabled: false
+ocr_engine: "auto"
+screenshot_retention_days: 7
+idle_threshold_sec: 180
+phash_enabled: true
+phash_threshold: 20
+
+# Privacy
+blocked_apps: []
+blocked_urls: []
+
+# Data dir for offline queue + temp screenshots
+# Leave empty to use ~/.auto_daily_log_collector
+data_dir: ""
+
+# Git repos (per-collector, each pushes commits independently)
+git_repos: []
