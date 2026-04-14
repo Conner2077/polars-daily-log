@@ -173,7 +173,12 @@
           <p class="card-hint">
             可用变量：<code>{date}</code> 日期、<code>{jira_issues}</code> 活跃任务列表、<code>{git_commits}</code> 当天提交记录、<code>{activities}</code> 活动采集记录
           </p>
-          <el-input v-model="settings.summarize_prompt" type="textarea" :rows="12" :placeholder="defaultPrompts.summarize_prompt" />
+          <div class="prompt-toolbar">
+            <span v-if="isDefaultPrompt('summarize_prompt')" class="prompt-badge">使用默认</span>
+            <span v-else class="prompt-badge modified">已自定义</span>
+            <el-button size="small" link @click="resetPrompt('summarize_prompt')">恢复默认</el-button>
+          </div>
+          <el-input v-model="settings.summarize_prompt" type="textarea" :rows="12" />
         </div>
 
         <div class="prompt-section">
@@ -185,7 +190,12 @@
           <p class="card-hint">
             可用变量：<code>{date}</code> 日期、<code>{issue_key}</code> 任务编号、<code>{issue_summary}</code> 任务标题、<code>{time_spent_hours}</code> 工时、<code>{summary}</code> 日志内容、<code>{git_commits}</code> 关联提交
           </p>
-          <el-input v-model="settings.auto_approve_prompt" type="textarea" :rows="12" :placeholder="defaultPrompts.auto_approve_prompt" />
+          <div class="prompt-toolbar">
+            <span v-if="isDefaultPrompt('auto_approve_prompt')" class="prompt-badge">使用默认</span>
+            <span v-else class="prompt-badge modified">已自定义</span>
+            <el-button size="small" link @click="resetPrompt('auto_approve_prompt')">恢复默认</el-button>
+          </div>
+          <el-input v-model="settings.auto_approve_prompt" type="textarea" :rows="12" />
         </div>
 
         <div class="prompt-section">
@@ -197,7 +207,12 @@
           <p class="card-hint">
             可用变量：<code>{period_start}</code> 开始日期、<code>{period_end}</code> 结束日期、<code>{period_type}</code> 报告类型（周报/月报）、<code>{daily_logs}</code> 每日日志内容
           </p>
-          <el-input v-model="settings.period_summary_prompt" type="textarea" :rows="12" :placeholder="defaultPrompts.period_summary_prompt" />
+          <div class="prompt-toolbar">
+            <span v-if="isDefaultPrompt('period_summary_prompt')" class="prompt-badge">使用默认</span>
+            <span v-else class="prompt-badge modified">已自定义</span>
+            <el-button size="small" link @click="resetPrompt('period_summary_prompt')">恢复默认</el-button>
+          </div>
+          <el-input v-model="settings.period_summary_prompt" type="textarea" :rows="12" />
         </div>
       </div>
     </div>
@@ -558,12 +573,36 @@ async function loadDefaultPrompts() {
   try {
     const res = await api.getDefaultPrompts()
     defaultPrompts.value = res.data
+    // If the stored setting is empty (meaning "use default"), prefill the
+    // textarea with the default so users can edit inline.
+    for (const key of ['summarize_prompt', 'auto_approve_prompt', 'period_summary_prompt']) {
+      if (!settings.value[key] || settings.value[key].trim() === '') {
+        settings.value[key] = defaultPrompts.value[key] || ''
+      }
+    }
   } catch (e) { /* ignore */ }
 }
 
+function isDefaultPrompt(key) {
+  const cur = (settings.value[key] || '').trim()
+  const def = (defaultPrompts.value[key] || '').trim()
+  return cur === def
+}
+
+function resetPrompt(key) {
+  settings.value[key] = defaultPrompts.value[key] || ''
+}
+
 async function saveAll() {
+  const PROMPT_KEYS = new Set(['summarize_prompt', 'auto_approve_prompt', 'period_summary_prompt'])
   for (const [key, value] of Object.entries(settings.value)) {
-    await api.putSetting(key, String(value))
+    let out = value
+    // Prompts: if user didn't change the default, save as empty string so
+    // that future default-template updates propagate automatically.
+    if (PROMPT_KEYS.has(key) && isDefaultPrompt(key)) {
+      out = ''
+    }
+    await api.putSetting(key, String(out))
   }
   ElMessage.success('Settings saved')
 }
@@ -708,6 +747,26 @@ onMounted(() => { loadSettings(); loadGitRepos(); loadDefaultPrompts(); loadRecy
   margin-top: 32px;
   padding-top: 24px;
   border-top: 1px solid var(--border);
+}
+
+.prompt-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.prompt-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 980px;
+  font-size: 11px;
+  font-weight: 500;
+  background: #eef2f8;
+  color: #6b7785;
+}
+.prompt-badge.modified {
+  background: #fff3e0;
+  color: #e65100;
 }
 
 .form-hint {

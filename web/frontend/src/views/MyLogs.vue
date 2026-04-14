@@ -90,6 +90,38 @@
         </div>
       </div>
 
+      <!-- Daily log: 全部活动 (raw, all-inclusive) -->
+      <div v-if="isDailyTag(draft) && draft.full_summary" class="issue-section">
+        <div class="issue-header">
+          <div style="display: flex; align-items: center; gap: 8px">
+            <span class="section-label">📋 全部活动</span>
+            <span class="section-hint">原汁原味，包含所有活动</span>
+          </div>
+          <div class="issue-actions">
+            <el-button
+              v-if="editingFullId !== draft.id"
+              round size="small"
+              @click="startFullEdit(draft)"
+            >编辑</el-button>
+          </div>
+        </div>
+        <div v-if="editingFullId === draft.id" class="issue-edit">
+          <el-input v-model="fullEditText" type="textarea" :rows="10" />
+          <div style="display: flex; gap: 8px; margin-top: 8px">
+            <el-button type="primary" round size="small" @click="saveFullEdit(draft.id)">保存</el-button>
+            <el-button round size="small" @click="editingFullId = null">取消</el-button>
+          </div>
+        </div>
+        <div v-else class="issue-body">
+          <p style="white-space: pre-wrap">{{ draft.full_summary }}</p>
+        </div>
+      </div>
+      <div v-else-if="isDailyTag(draft) && !draft.full_summary && parseIssues(draft.summary)" class="issue-section">
+        <div class="issue-header">
+          <span class="section-hint">旧版日志无「全部活动」原始记录。重新生成可获得。</span>
+        </div>
+      </div>
+
       <!-- Daily log: show per-issue sections -->
       <template v-if="isDailyTag(draft) && parseIssues(draft.summary)">
         <div v-for="(issue, idx) in parseIssues(draft.summary)" :key="idx" class="issue-section">
@@ -160,7 +192,17 @@
       <!-- Card-level action buttons -->
       <div v-if="isDailyTag(draft) && draft.status === 'pending_review'" class="log-actions">
         <el-button type="primary" round size="small" @click="approve(draft.id)">一键通过</el-button>
-        <el-button type="danger" round size="small" plain @click="reject(draft.id)">驳回</el-button>
+        <el-popconfirm
+          title="归档后进回收站，可在 Settings 恢复。"
+          confirm-button-text="归档"
+          cancel-button-text="取消"
+          :width="260"
+          @confirm="archiveDraft(draft.id)"
+        >
+          <template #reference>
+            <el-button round size="small" class="danger-btn">归档</el-button>
+          </template>
+        </el-popconfirm>
       </div>
       <div v-else-if="isDailyTag(draft) && (draft.status === 'approved' || draft.status === 'auto_approved')" class="log-actions">
         <el-button type="primary" round size="small" @click="submitAll(draft.id)">全部提交到 Jira</el-button>
@@ -190,6 +232,8 @@ const selectedDate = ref(new Date().toISOString().split('T')[0])
 const drafts = ref([])
 const editingIssue = ref(null)
 const issueEditForm = ref({ issue_key: '', time_spent_hours: 0, summary: '' })
+const editingFullId = ref(null)
+const fullEditText = ref('')
 const auditVisible = ref(false)
 const auditLogs = ref([])
 const activeTag = ref('')
@@ -329,9 +373,24 @@ async function approve(id) {
   await loadDrafts()
 }
 
-async function reject(id) {
+async function archiveDraft(id) {
+  // Archive = soft-delete via reject endpoint + set status=archived via update
+  // For now we reuse rejectDraft to mark as rejected (treated same as archived in UI)
+  // TODO: add a dedicated archive endpoint; for now reject semantics cover it.
   await api.rejectDraft(id)
-  ElMessage.warning('已驳回')
+  ElMessage.warning('已归档')
+  await loadDrafts()
+}
+
+function startFullEdit(draft) {
+  editingFullId.value = draft.id
+  fullEditText.value = draft.full_summary || ''
+}
+
+async function saveFullEdit(draftId) {
+  await api.updateDraft(draftId, { full_summary: fullEditText.value })
+  editingFullId.value = null
+  ElMessage.success('已更新')
   await loadDrafts()
 }
 
@@ -443,6 +502,15 @@ onMounted(loadDrafts)
 }
 .issue-section:last-child {
   border-bottom: none;
+}
+.section-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #1d1d1f);
+}
+.section-hint {
+  font-size: 12px;
+  color: var(--text-tertiary, #aeaeb2);
 }
 .issue-header {
   display: flex;

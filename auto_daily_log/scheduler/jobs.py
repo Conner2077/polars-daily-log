@@ -32,6 +32,15 @@ class DailyWorkflow:
         await self._submit_approved(target_date)
 
     async def auto_approve_pending(self, target_date: str) -> None:
+        """Auto-approve pass: the AUTO_APPROVE_PROMPT already ran at
+        generation time (18:00) and produced per-issue JSON. At 21:30
+        we just mark leftover pending drafts as auto_approved so the
+        submit pass picks them up. No additional LLM call.
+
+        Drafts with empty per-issue JSON (LLM found no work content)
+        are NOT auto-approved — they stay pending for the user to
+        handle manually.
+        """
         if not self._auto_approve_config.enabled:
             return
 
@@ -40,58 +49,28 @@ class DailyWorkflow:
             (target_date,),
         )
 
-        prompt_template = await self._get_auto_approve_prompt()
-
         for draft in drafts:
-            # Parse issue entries from summary JSON
             try:
                 issue_entries = json.loads(draft["summary"])
             except (json.JSONDecodeError, TypeError):
+                issue_entries = []
+
+            if not issue_entries:
+                # Nothing to submit — keep pending, write audit note
+                await self._db.execute(
+                    "INSERT INTO audit_logs (draft_id, action, after_snapshot) VALUES (?, 'auto_skipped', ?)",
+                    (draft["id"], json.dumps({"reason": "no issue entries"}, ensure_ascii=False)),
+                )
                 continue
 
-            # Build a combined summary for LLM review
-            issues_text_parts = []
-            for entry in issue_entries:
-                issue = await self._db.fetch_one(
-                    "SELECT * FROM jira_issues WHERE issue_key = ?", (entry["issue_key"],),
-                )
-                issue_summary = issue["summary"] if issue else ""
-                issues_text_parts.append(
-                    f"- {entry['issue_key']} ({entry['time_spent_hours']}h) [{issue_summary}]: {entry['summary']}"
-                )
-
-            commits = await self._db.fetch_all(
-                "SELECT * FROM git_commits WHERE date = ?", (target_date,)
+            await self._db.execute(
+                "UPDATE worklog_drafts SET status = 'auto_approved', updated_at = datetime('now') WHERE id = ?",
+                (draft["id"],),
             )
-            commits_text = "\n".join(f"- {c['message']}" for c in commits) or "无"
-
-            prompt = render_prompt(
-                prompt_template,
-                date=target_date,
-                issue_key="DAILY",
-                issue_summary="\n".join(issues_text_parts),
-                time_spent_hours=round(draft["time_spent_sec"] / 3600, 1),
-                summary="\n".join(issues_text_parts),
-                git_commits=commits_text,
+            await self._db.execute(
+                "INSERT INTO audit_logs (draft_id, action, after_snapshot) VALUES (?, 'auto_approved', ?)",
+                (draft["id"], json.dumps({"issue_count": len(issue_entries)}, ensure_ascii=False)),
             )
-
-            raw_response = await self._engine.generate(prompt)
-            result = self._parse_approval(raw_response)
-
-            if result.get("approved"):
-                await self._db.execute(
-                    "UPDATE worklog_drafts SET status = 'auto_approved', updated_at = datetime('now') WHERE id = ?",
-                    (draft["id"],),
-                )
-                await self._db.execute(
-                    "INSERT INTO audit_logs (draft_id, action, after_snapshot) VALUES (?, 'auto_approved', ?)",
-                    (draft["id"], raw_response),
-                )
-            else:
-                await self._db.execute(
-                    "INSERT INTO audit_logs (draft_id, action, after_snapshot) VALUES (?, 'auto_rejected', ?)",
-                    (draft["id"], raw_response),
-                )
 
     async def _submit_approved(self, target_date: str) -> None:
         """Submit all approved/auto_approved daily drafts to Jira."""
@@ -121,15 +100,9 @@ class DailyWorkflow:
 
         for draft in drafts:
             try:
-                # Use first activity timestamp of the day, fallback to 09:00
-                first = await self._db.fetch_one(
-                    "SELECT timestamp FROM activities WHERE date(timestamp) = ? ORDER BY timestamp LIMIT 1",
-                    (draft['date'],),
-                )
-                if first and first['timestamp']:
-                    started = f"{first['timestamp'][:19]}.000+0800"
-                else:
-                    started = f"{draft['date']}T09:00:00.000+0800"
+                # Jira started = {draft_date}T21:00 — record against the
+                # day the work happened, even for historical submissions.
+                started = f"{draft['date']}T21:00:00.000+0800"
 
                 # Parse issue entries from summary JSON
                 try:

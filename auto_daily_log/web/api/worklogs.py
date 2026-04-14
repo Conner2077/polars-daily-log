@@ -16,6 +16,7 @@ class DraftUpdate(BaseModel):
     time_spent_sec: Optional[int] = None
     summary: Optional[str] = None
     issue_key: Optional[str] = None
+    full_summary: Optional[str] = None
 
 class IssueUpdate(BaseModel):
     issue_key: Optional[str] = None
@@ -307,6 +308,7 @@ async def update_draft(draft_id: int, body: DraftUpdate, request: Request):
     if body.time_spent_sec is not None: updates.append("time_spent_sec = ?"); params.append(body.time_spent_sec)
     if body.summary is not None: updates.append("summary = ?"); params.append(body.summary)
     if body.issue_key is not None: updates.append("issue_key = ?"); params.append(body.issue_key)
+    if body.full_summary is not None: updates.append("full_summary = ?"); params.append(body.full_summary)
     params.append(draft_id)
     await db.execute(f"UPDATE worklog_drafts SET {', '.join(updates)} WHERE id = ?", tuple(params))
     updated = await db.fetch_one("SELECT * FROM worklog_drafts WHERE id = ?", (draft_id,))
@@ -359,15 +361,13 @@ async def _get_jira_client(db):
 
 
 async def _get_started_timestamp(db, draft_date: str) -> str:
-    """Get first activity timestamp of the day, fallback to 09:00."""
-    first_activity = await db.fetch_one(
-        "SELECT timestamp FROM activities WHERE date(timestamp) = ? ORDER BY timestamp LIMIT 1",
-        (draft_date,),
-    )
-    if first_activity and first_activity['timestamp']:
-        ts = first_activity['timestamp'][:19]
-        return f"{ts}.000+0800"
-    return f"{draft_date}T09:00:00.000+0800"
+    """Jira `started` = {draft_date}T21:00:00.000+0800.
+
+    We always use 21:00 of the day the work happened (per user request):
+    even historical drafts keep their original date, so submitting a
+    week-old log still records it against that week-old date.
+    """
+    return f"{draft_date}T21:00:00.000+0800"
 
 
 @router.post("/worklogs/{draft_id}/submit")

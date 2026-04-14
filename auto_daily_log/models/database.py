@@ -150,6 +150,7 @@ class Database:
             ("tag", "ALTER TABLE worklog_drafts ADD COLUMN tag TEXT DEFAULT 'daily'"),
             ("period_start", "ALTER TABLE worklog_drafts ADD COLUMN period_start TEXT"),
             ("period_end", "ALTER TABLE worklog_drafts ADD COLUMN period_end TEXT"),
+            ("full_summary", "ALTER TABLE worklog_drafts ADD COLUMN full_summary TEXT"),
         ]
         for col, sql in migrations:
             if col not in col_names:
