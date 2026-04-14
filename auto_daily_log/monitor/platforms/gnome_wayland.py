@@ -24,9 +24,9 @@ def _sanitize_text(value: Optional[str]) -> Optional[str]:
     return value.strip() or None
 
 
-def _ensure_atspi_bus_address() -> None:
+def _ensure_atspi_bus_address() -> bool:
     if os.environ.get("AT_SPI_BUS_ADDRESS"):
-        return
+        return True
     try:
         result = subprocess.run(
             [
@@ -40,12 +40,15 @@ def _ensure_atspi_bus_address() -> None:
         match = re.search(r"'([^']+)'", result.stdout)
         if match:
             os.environ["AT_SPI_BUS_ADDRESS"] = match.group(1)
+            return True
     except Exception:
         pass
+    return bool(os.environ.get("AT_SPI_BUS_ADDRESS"))
 
 
 def _import_atspi():
-    _ensure_atspi_bus_address()
+    if not _ensure_atspi_bus_address():
+        raise RuntimeError("AT-SPI bus unavailable")
     try:
         import gi  # type: ignore
     except ImportError:
