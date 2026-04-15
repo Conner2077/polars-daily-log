@@ -1,15 +1,25 @@
 <template>
   <div class="issues-page">
+    <!-- Page Header -->
     <div class="page-header">
-      <h2>Jira Issues</h2>
+      <div class="page-header-left">
+        <h2 class="page-title">活跃 Issue 列表</h2>
+        <div class="page-subtitle">{{ subtitleText }}</div>
+      </div>
       <el-button type="primary" round @click="dialogVisible = true">
-        Add Issue
+        添加 Issue
       </el-button>
     </div>
 
-    <div class="issues-card">
-      <el-table :data="issues">
-        <el-table-column prop="issue_key" label="Key" width="150">
+    <!-- Issues table card -->
+    <div class="card issues-card">
+      <el-table
+        v-if="issues.length"
+        :data="issues"
+        style="width: 100%"
+        :row-style="{ height: '52px' }"
+      >
+        <el-table-column prop="issue_key" label="Key" width="120">
           <template #default="{ row }">
             <span class="issue-key">{{ row.issue_key }}</span>
           </template>
@@ -19,17 +29,22 @@
             <span class="issue-summary">{{ row.summary }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="description" label="描述" min-width="250" show-overflow-tooltip>
+        <el-table-column
+          prop="description"
+          label="描述"
+          min-width="250"
+          show-overflow-tooltip
+        >
           <template #default="{ row }">
-            <span style="color: var(--text-secondary, #86868b); font-size: 13px">{{ row.description }}</span>
+            <span class="issue-description">{{ row.description }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="Active" width="100">
+        <el-table-column label="Active" width="80" align="center">
           <template #default="{ row }">
             <el-switch v-model="row.is_active" @change="toggleActive(row)" />
           </template>
         </el-table-column>
-        <el-table-column label="" width="80" align="center">
+        <el-table-column label="" width="60" align="center">
           <template #default="{ row }">
             <el-popconfirm
               :title="`删除 ${row.issue_key}？`"
@@ -39,7 +54,7 @@
               @confirm="confirmDelete(row.issue_key)"
             >
               <template #reference>
-                <el-button size="small" text style="color: #c0c4cc">
+                <el-button text class="row-delete-btn">
                   <el-icon><Delete /></el-icon>
                 </el-button>
               </template>
@@ -48,18 +63,28 @@
         </el-table-column>
       </el-table>
 
-      <div v-if="issues.length === 0" class="empty-state">
-        No issues configured yet
-      </div>
+      <el-empty
+        v-else
+        description="暂无 Issue，点击右上角添加"
+      />
     </div>
 
     <!-- Add Issue Dialog -->
-    <el-dialog v-model="dialogVisible" title="Add Jira Issue" width="500px">
+    <el-dialog v-model="dialogVisible" title="添加 Issue" width="500px">
       <el-form :model="newIssue" label-position="top" class="add-form">
         <el-form-item label="Issue Key" required>
-          <div style="display: flex; gap: 8px">
-            <el-input v-model="newIssue.issue_key" placeholder="e.g. PLS-4387" @blur="fetchIssueInfo" />
-            <el-button round :loading="fetching" @click="fetchIssueInfo" :disabled="!newIssue.issue_key">
+          <div class="key-row">
+            <el-input
+              v-model="newIssue.issue_key"
+              placeholder="e.g. PLS-4387"
+              @blur="fetchIssueInfo"
+            />
+            <el-button
+              round
+              :loading="fetching"
+              :disabled="!newIssue.issue_key"
+              @click="fetchIssueInfo"
+            >
               {{ fetching ? '获取中...' : '自动获取' }}
             </el-button>
           </div>
@@ -77,16 +102,17 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button round @click="dialogVisible = false">Cancel</el-button>
-        <el-button type="primary" round @click="addIssue">Add Issue</el-button>
+        <el-button round @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" round @click="addIssue">添加</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ref, computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import { Delete } from '@element-plus/icons-vue'
 import api from '../api'
 
 const issues = ref([])
@@ -94,7 +120,17 @@ const dialogVisible = ref(false)
 const newIssue = ref({ issue_key: '', summary: '', description: '' })
 const fetching = ref(false)
 
-async function loadIssues() { const res = await api.getIssues(); issues.value = res.data }
+const subtitleText = computed(() => {
+  const total = issues.value.length
+  const active = issues.value.filter((i) => i.is_active).length
+  const archived = total - active
+  return `${active} 个 active issue · ${archived} 个归档`
+})
+
+async function loadIssues() {
+  const res = await api.getIssues()
+  issues.value = res.data
+}
 
 async function fetchIssueInfo() {
   const key = newIssue.value.issue_key.trim().toUpperCase()
@@ -107,26 +143,38 @@ async function fetchIssueInfo() {
     newIssue.value.description = res.data.description || ''
     ElMessage.success(`已获取: ${res.data.summary}`)
   } catch (e) {
-    ElMessage.warning(e.response?.data?.detail || '无法从 Jira 获取任务信息，请手动填写')
+    ElMessage.warning(
+      e.response?.data?.detail || '无法从 Jira 获取任务信息，请手动填写'
+    )
   } finally {
     fetching.value = false
   }
 }
 
 async function addIssue() {
-  if (!newIssue.value.issue_key) { ElMessage.warning('Issue key is required'); return }
+  if (!newIssue.value.issue_key) {
+    ElMessage.warning('Issue key is required')
+    return
+  }
   try {
     await api.addIssue(newIssue.value)
-    ElMessage.success('Issue added'); dialogVisible.value = false
+    ElMessage.success('Issue added')
+    dialogVisible.value = false
     newIssue.value = { issue_key: '', summary: '', description: '' }
     await loadIssues()
-  } catch (e) { ElMessage.error(e.response?.data?.detail || 'Failed to add issue') }
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || 'Failed to add issue')
+  }
 }
 
-async function toggleActive(row) { await api.updateIssue(row.issue_key, { is_active: row.is_active }) }
+async function toggleActive(row) {
+  await api.updateIssue(row.issue_key, { is_active: row.is_active })
+}
 
 async function confirmDelete(key) {
-  await api.deleteIssue(key); ElMessage.success('已删除'); await loadIssues()
+  await api.deleteIssue(key)
+  ElMessage.success('已删除')
+  await loadIssues()
 }
 
 onMounted(loadIssues)
@@ -134,44 +182,89 @@ onMounted(loadIssues)
 
 <style scoped>
 .issues-page {
-  max-width: 800px;
-  margin: 0 auto;
+  width: 100%;
 }
 
+/* ───── Page header ───── */
 .page-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 32px;
+  align-items: flex-start;
+  margin-bottom: 24px;
+  gap: 16px;
+}
+
+.page-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.page-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: var(--ink);
+  margin: 0;
+  line-height: 1.2;
+}
+
+.page-subtitle {
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+/* ───── Card chrome ───── */
+.card {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
 }
 
 .issues-card {
-  background: var(--surface);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  overflow: hidden;
-  padding: 4px 0;
+  padding: 0;
 }
 
+/* ───── Table cell content ───── */
 .issue-key {
-  font-weight: 600;
-  color: var(--accent);
-  font-size: 14px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--ink);
+  letter-spacing: 0.02em;
 }
 
 .issue-summary {
-  font-size: 14px;
-  color: var(--text-primary);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink);
 }
 
+.issue-description {
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+.row-delete-btn {
+  color: var(--ink-dim) !important;
+}
+
+.row-delete-btn:hover {
+  color: var(--danger) !important;
+}
+
+/* ───── Dialog form ───── */
 .add-form {
   padding: 0 4px;
 }
 
-.empty-state {
-  text-align: center;
-  padding: 48px;
-  color: var(--text-tertiary);
-  font-size: 14px;
+.key-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.key-row .el-input {
+  flex: 1;
 }
 </style>

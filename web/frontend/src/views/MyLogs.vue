@@ -1,9 +1,13 @@
 <template>
-  <div>
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px">
-      <h2 class="page-title">My Logs</h2>
-      <div style="display: flex; gap: 8px; align-items: center">
-        <el-button type="primary" round :disabled="generating" @click="generate('daily')">总结当天</el-button>
+  <div class="my-logs">
+    <!-- Page header -->
+    <div class="page-header">
+      <div class="page-header-left">
+        <h2 class="page-title">Worklog 草稿</h2>
+        <div class="page-subtitle">{{ headerSubtitle }}</div>
+      </div>
+      <div class="page-header-right">
+        <el-button round :disabled="generating" @click="generate('daily')">总结当天</el-button>
         <el-button round :disabled="generating" @click="generate('weekly')">总结这周</el-button>
         <el-button round :disabled="generating" @click="generate('monthly')">总结当月</el-button>
         <el-popover trigger="click" :width="300">
@@ -11,16 +15,23 @@
             <el-button round :disabled="generating">自定义</el-button>
           </template>
           <div>
-            <p style="margin-bottom: 8px; font-size: 13px; color: var(--text-secondary)">选择日期范围</p>
+            <p class="popover-hint">选择日期范围</p>
             <el-date-picker
               v-model="customRange"
               type="daterange"
               value-format="YYYY-MM-DD"
               start-placeholder="开始日期"
               end-placeholder="结束日期"
-              style="width: 100%; margin-bottom: 12px"
+              class="full-width mb-12"
             />
-            <el-button type="primary" size="small" round :disabled="!customRange || customRange.length < 2 || generating" @click="generateCustom" style="width: 100%">
+            <el-button
+              type="primary"
+              size="small"
+              round
+              :disabled="!customRange || customRange.length < 2 || generating"
+              @click="generateCustom"
+              class="full-width"
+            >
               生成总结
             </el-button>
           </div>
@@ -28,29 +39,19 @@
       </div>
     </div>
 
-    <!-- Generating overlay -->
-    <div v-if="generating" class="generating-overlay">
-      <div class="generating-card">
-        <div class="generating-spinner"></div>
-        <div class="generating-text">{{ generatingText }}</div>
-        <div class="generating-dots">
-          <span v-for="i in 3" :key="i" class="dot" :style="{ animationDelay: `${(i - 1) * 0.3}s` }"></span>
-        </div>
+    <!-- Filter tabs + date picker -->
+    <div class="toolbar">
+      <div class="tag-filters">
+        <el-button
+          v-for="t in tagFilters" :key="t.value"
+          :type="activeTag === t.value ? 'primary' : ''"
+          :plain="activeTag !== t.value"
+          round size="small"
+          @click="filterByTag(t.value)"
+        >
+          {{ t.label }}
+        </el-button>
       </div>
-    </div>
-
-    <!-- Filter tabs -->
-    <div style="display: flex; gap: 8px; margin-bottom: 20px">
-      <el-button
-        v-for="t in tagFilters" :key="t.value"
-        :type="activeTag === t.value ? 'primary' : ''"
-        :plain="activeTag !== t.value"
-        round size="small"
-        @click="filterByTag(t.value)"
-      >
-        {{ t.label }}
-      </el-button>
-      <div style="flex: 1" />
       <el-date-picker
         v-if="activeTag === '' || activeTag === 'daily'"
         v-model="selectedDate"
@@ -63,38 +64,53 @@
       />
     </div>
 
-    <div v-if="drafts.length === 0" style="text-align: center; padding: 60px; color: var(--text-tertiary, #aeaeb2)">
-      暂无日志记录
+    <!-- Generating overlay -->
+    <div v-if="generating" class="generating-overlay">
+      <div class="generating-card">
+        <div class="generating-spinner"></div>
+        <div class="generating-text">{{ generatingText }}</div>
+        <div class="generating-dots">
+          <span v-for="i in 3" :key="i" class="dot" :style="{ animationDelay: `${(i - 1) * 0.2}s` }"></span>
+        </div>
+      </div>
     </div>
+
+    <!-- Empty state -->
+    <el-empty
+      v-if="drafts.length === 0"
+      description="该日期暂无 Worklog 草稿"
+      class="empty-card"
+    />
 
     <!-- Log cards -->
     <div v-for="draft in drafts" :key="draft.id" class="log-card">
       <!-- Card header -->
       <div class="log-header">
-        <div style="display: flex; align-items: center; gap: 8px">
-          <span :class="['tag-pill', `tag-${draft.tag || 'daily'}`]">{{ tagLabel(draft.tag) }}</span>
+        <div class="log-header-left">
           <span class="log-period">
             {{ draft.period_start && draft.period_end && draft.period_start !== draft.period_end
               ? `${draft.period_start} ~ ${draft.period_end}`
               : draft.date }}
           </span>
-          <span v-if="isDailyTag(draft)" :class="['status-pill', `status-${draft.status}`]">
-            {{ statusLabel(draft.status) }}
-          </span>
-          <span v-if="draft.user_edited" style="font-size: 11px; color: var(--text-tertiary, #aeaeb2)">(已编辑)</span>
+          <span class="log-hours">{{ (draft.time_spent_sec / 3600).toFixed(1) }}h</span>
+          <span v-if="draft.user_edited" class="edited-hint">已编辑</span>
         </div>
-        <div style="display: flex; align-items: center; gap: 12px">
-          <div class="log-hours">
-            {{ (draft.time_spent_sec / 3600).toFixed(1) }}h
-          </div>
+        <div class="log-header-right">
+          <el-tag size="small" round>{{ tagLabel(draft.tag) }}</el-tag>
+          <el-tag
+            v-if="isDailyTag(draft)"
+            :type="statusTagType(draft.status)"
+            size="small"
+            round
+          >{{ statusLabel(draft.status) }}</el-tag>
         </div>
       </div>
 
       <!-- Daily log: 全部活动 (raw, all-inclusive) -->
       <div v-if="isDailyTag(draft) && draft.full_summary" class="issue-section">
         <div class="issue-header">
-          <div style="display: flex; align-items: center; gap: 8px">
-            <span class="section-label">📋 全部活动</span>
+          <div class="issue-header-left">
+            <span class="section-label">全部活动</span>
             <span class="section-hint">原汁原味，包含所有活动</span>
           </div>
           <div class="issue-actions">
@@ -107,7 +123,7 @@
         </div>
         <div v-if="editingFullId === draft.id" class="issue-edit">
           <el-input v-model="fullEditText" type="textarea" :rows="10" />
-          <div style="display: flex; gap: 8px; margin-top: 8px">
+          <div class="edit-actions">
             <el-button type="primary" round size="small" @click="saveFullEdit(draft.id)">保存</el-button>
             <el-button round size="small" @click="editingFullId = null">取消</el-button>
           </div>
@@ -127,11 +143,11 @@
             <div class="issue-header-left">
               <a
                 v-if="!isSkippedIssue(issue.issue_key) && jiraIssueUrl(issue.issue_key)"
-                class="log-issue log-issue-link"
+                :class="['log-issue', 'log-issue-link', issueKeyClass(draft, issue)]"
                 :href="jiraIssueUrl(issue.issue_key)"
                 target="_blank" rel="noopener"
               >{{ issue.issue_key }}</a>
-              <span v-else class="log-issue">{{ issue.issue_key }}</span>
+              <span v-else :class="['log-issue', issueKeyClass(draft, issue)]">{{ issue.issue_key }}</span>
               <span
                 v-if="issueTitle(issue.issue_key)"
                 class="issue-title"
@@ -162,39 +178,37 @@
                   @click="submitSingleIssue(draft.id, idx)"
                 >提交到 Jira</el-button>
               </template>
-              <span v-if="issue.jira_worklog_id" class="submitted-badge">已提交</span>
+              <el-tag v-if="issue.jira_worklog_id" type="success" size="small" round>已提交</el-tag>
             </div>
           </div>
 
           <!-- Edit mode for this issue -->
           <div v-if="editingIssue === `${draft.id}-${idx}`" class="issue-edit">
-            <div style="margin-bottom: 8px">
+            <div class="edit-field">
               <label class="edit-label">Issue Key</label>
               <el-input v-model="issueEditForm.issue_key" placeholder="e.g. PLS-4387" size="small" />
             </div>
-            <div style="margin-bottom: 8px">
+            <div class="edit-field">
               <label class="edit-label">工时 (小时)</label>
               <el-input-number v-model="issueEditForm.time_spent_hours" :min="0" :step="0.5" :precision="1" size="small" />
             </div>
-            <div style="margin-bottom: 8px">
+            <div class="edit-field">
               <label class="edit-label">摘要</label>
               <el-input v-model="issueEditForm.summary" type="textarea" :rows="3" />
             </div>
-            <div style="display: flex; gap: 8px">
+            <div class="edit-actions">
               <el-button type="primary" round size="small" @click="saveIssueEdit(draft.id, idx)">保存</el-button>
               <el-button round size="small" @click="editingIssue = null">取消</el-button>
             </div>
           </div>
-          <div v-else class="issue-body">
-            <p style="white-space: pre-wrap">{{ issue.summary }}</p>
-          </div>
+          <div v-else class="issue-body markdown-body" v-html="renderMarkdown(issue.summary)"></div>
         </div>
       </template>
 
-      <!-- Non-daily or fallback: plain text summary -->
-      <template v-else>
-        <div class="log-body">
-          <p style="white-space: pre-wrap">{{ draft.summary }}</p>
+      <!-- Non-daily or fallback: markdown summary -->
+      <template v-else-if="!isDailyTag(draft) || !draft.full_summary">
+        <div class="issue-section">
+          <div class="issue-body markdown-body" v-html="renderMarkdown(draft.summary)"></div>
         </div>
       </template>
 
@@ -225,7 +239,7 @@
       <el-timeline>
         <el-timeline-item v-for="log in auditLogs" :key="log.id" :timestamp="log.created_at">
           <strong>{{ log.action }}</strong>
-          <pre v-if="log.after_snapshot" style="font-size: 12px; max-height: 200px; overflow: auto">{{ log.after_snapshot }}</pre>
+          <pre v-if="log.after_snapshot" class="audit-snapshot">{{ log.after_snapshot }}</pre>
         </el-timeline-item>
       </el-timeline>
     </el-dialog>
@@ -233,7 +247,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { marked } from 'marked'
 import api from '../api'
@@ -302,6 +316,30 @@ function statusLabel(status) {
   return map[status] || status
 }
 
+function statusTagType(status) {
+  switch (status) {
+    case 'pending_review':
+      return 'warning'
+    case 'approved':
+    case 'auto_approved':
+      return 'success'
+    case 'submitted':
+      return 'info'
+    case 'rejected':
+    case 'auto_rejected':
+      return 'danger'
+    case 'archived':
+    default:
+      return 'info'
+  }
+}
+
+function issueKeyClass(draft, issue) {
+  if (issue.jira_worklog_id) return 'log-issue--submitted'
+  if (draft.status === 'pending_review') return 'log-issue--pending'
+  return ''
+}
+
 function isDailyTag(draft) {
   return draft.tag === 'daily' || !draft.tag
 }
@@ -317,6 +355,25 @@ function parseIssues(summary) {
   } catch {}
   return null
 }
+
+const headerSubtitle = computed(() => {
+  const parts = []
+  if (selectedDate.value && (activeTag.value === '' || activeTag.value === 'daily')) {
+    try {
+      const d = new Date(selectedDate.value + 'T00:00:00')
+      const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+      parts.push(`${selectedDate.value} · ${weekdays[d.getDay()]}`)
+    } catch {
+      parts.push(selectedDate.value)
+    }
+  }
+  const pending = drafts.value.filter(d => d.status === 'pending_review').length
+  const submitted = drafts.value.filter(d => d.status === 'submitted').length
+  if (pending > 0) parts.push(`${pending} 条待审批`)
+  if (submitted > 0) parts.push(`${submitted} 条已提交`)
+  if (drafts.value.length === 0) parts.push('暂无记录')
+  return parts.join(' · ')
+})
 
 async function loadDrafts() {
   if (activeTag.value) {
@@ -485,75 +542,200 @@ onMounted(() => { loadJiraContext(); loadDrafts() })
 </script>
 
 <style scoped>
+.my-logs {
+  width: 100%;
+}
+
+/* ───── Page header ───── */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.page-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
 .page-title {
-  font-size: 28px;
+  font-size: 22px;
   font-weight: 700;
   letter-spacing: -0.5px;
+  color: var(--ink);
+  margin: 0;
+  line-height: 1.2;
 }
+
+.page-subtitle {
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+.page-header-right {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.popover-hint {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+.full-width { width: 100%; }
+.mb-12 { margin-bottom: 12px; }
+
+/* ───── Toolbar: filter tabs + date picker ───── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.tag-filters {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+}
+
+/* ───── Empty state ───── */
+.empty-card {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 40px 24px;
+}
+
+/* ───── Log card chrome ───── */
 .log-card {
-  background: var(--surface, #fff);
-  border-radius: 16px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 24px;
   margin-bottom: 16px;
-  overflow: hidden;
-  transition: box-shadow 0.2s;
 }
-.log-card:hover {
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-}
+
 .log-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border, rgba(0,0,0,0.06));
+  gap: 12px;
+  margin-bottom: 16px;
 }
-.log-body {
-  padding: 16px 20px;
-  font-size: 14px;
-  line-height: 1.7;
-  color: var(--text-primary, #1d1d1f);
-}
-.log-actions {
-  padding: 12px 20px;
-  border-top: 1px solid var(--border, rgba(0,0,0,0.06));
+
+.log-header-left {
   display: flex;
-  gap: 8px;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
 }
-.log-hours {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--text-primary, #1d1d1f);
+
+.log-header-right {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
 }
+
 .log-period {
   font-size: 14px;
-  color: var(--text-secondary, #86868b);
-}
-/* Issue-key pill — small, filled, links get subtle underline on hover */
-.log-issue {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 9px;
-  font-size: 12px;
   font-weight: 600;
-  color: var(--accent, #0071e3);
-  background: rgba(0, 113, 227, 0.08);
-  border-radius: 6px;
-  letter-spacing: 0.2px;
+  color: var(--ink);
+}
+
+.log-hours {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.edited-hint {
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+
+/* ───── Issue sections within a card ───── */
+.issue-section {
+  padding: 14px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.issue-section:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.issue-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.issue-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+}
+
+.section-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.section-hint {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+/* Issue key — mono, small, state-colored */
+.log-issue {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  letter-spacing: 0.02em;
   flex-shrink: 0;
   line-height: 1.5;
 }
+
+.log-issue--pending {
+  color: var(--warning);
+}
+
+.log-issue--submitted {
+  color: var(--ink-dim);
+}
+
 .log-issue-link {
   text-decoration: none;
-  transition: background 0.15s;
+  transition: opacity 0.15s ease;
 }
+
 .log-issue-link:hover {
-  background: rgba(0, 113, 227, 0.16);
+  opacity: 0.7;
 }
+
 .issue-title {
-  font-size: 13px;
-  color: var(--text-secondary, #86868b);
-  max-width: 340px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  max-width: 420px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -561,213 +743,250 @@ onMounted(() => { loadJiraContext(); loadDrafts() })
   min-width: 0;
 }
 
-/* Issue sections within a daily card — left accent rail groups the block */
-.issue-section {
-  position: relative;
-  border-bottom: 1px solid var(--border, rgba(0,0,0,0.04));
-  padding-left: 3px;
-  transition: background 0.15s;
-}
-.issue-section::before {
-  content: "";
-  position: absolute;
-  left: 0; top: 10px; bottom: 10px;
-  width: 3px;
-  background: var(--accent, #0071e3);
-  opacity: 0.25;
-  border-radius: 2px;
-  transition: opacity 0.15s;
-}
-.issue-section:hover::before {
-  opacity: 0.6;
-}
-.issue-section:last-child {
-  border-bottom: none;
-}
-.section-label {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary, #1d1d1f);
-}
-.section-hint {
-  font-size: 12px;
-  color: var(--text-tertiary, #aeaeb2);
-}
-.issue-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px 20px 0;
-  gap: 12px;
-}
-.issue-header-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-/* Hours chip — neutral gray pill, subtler than the issue-key pill */
 .issue-hours {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 8px;
   font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary, #6e6e73);
-  background: rgba(0, 0, 0, 0.04);
-  border-radius: 5px;
+  color: var(--ink-muted);
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
+  margin-left: auto;
 }
-.issue-body {
-  padding: 6px 20px 14px;
-  font-size: 14px;
-  line-height: 1.65;
-  color: var(--text-primary, #1d1d1f);
-}
-.issue-body p {
-  margin: 0;
-  color: var(--text-primary, #1d1d1f);
-}
-.markdown-body :deep(h1),
-.markdown-body :deep(h2),
-.markdown-body :deep(h3) {
-  margin: 12px 0 6px;
-  font-weight: 600;
-  line-height: 1.4;
-}
-.markdown-body :deep(h2) { font-size: 15px; }
-.markdown-body :deep(h3) { font-size: 14px; color: var(--text-secondary, #6e6e73); }
-.markdown-body :deep(p) { margin: 6px 0; }
-.markdown-body :deep(ul),
-.markdown-body :deep(ol) { margin: 6px 0; padding-left: 22px; }
-.markdown-body :deep(li) { margin: 2px 0; }
-.markdown-body :deep(code) {
-  background: rgba(0,0,0,0.05);
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-size: 13px;
-}
-.markdown-body :deep(strong) { font-weight: 600; }
-.issue-edit {
-  padding: 8px 20px 12px;
-}
-.edit-label {
-  font-size: 13px;
-  color: var(--text-secondary, #86868b);
-  margin-bottom: 4px;
-  display: block;
-}
+
 .issue-actions {
   display: flex;
   gap: 6px;
   align-items: center;
   justify-content: flex-end;
-  min-width: 180px;
   flex-shrink: 0;
 }
+
 .skip-hint {
   font-size: 11px;
-  color: var(--text-tertiary, #aeaeb2);
-}
-.submitted-badge {
-  font-size: 11px;
-  padding: 1px 8px;
-  border-radius: 980px;
-  background: #e8f5e9;
-  color: #2e7d32;
-  font-weight: 500;
+  color: var(--ink-dim);
 }
 
-.tag-pill {
-  font-size: 11px;
+/* ───── Issue body / markdown ───── */
+.issue-body {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+  padding-left: 4px;
+}
+
+/* Markdown rendering — all typography inherits from theme */
+.markdown-body :deep(h1) {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 12px 0 8px;
+  line-height: 1.4;
+}
+
+.markdown-body :deep(h2) {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 12px 0 6px;
+  line-height: 1.4;
+}
+
+.markdown-body :deep(h3) {
+  font-size: 15px;
   font-weight: 600;
-  padding: 2px 10px;
-  border-radius: 980px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  color: var(--ink);
+  margin: 10px 0 6px;
+  line-height: 1.4;
 }
-.tag-daily { background: #e3f2fd; color: #1565c0; }
-.tag-weekly { background: #e8f5e9; color: #2e7d32; }
-.tag-monthly { background: #f3e5f5; color: #7b1fa2; }
-.tag-custom { background: #f5f5f5; color: #616161; }
-.status-pill {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 980px;
-}
-.status-pending_review { background: #fff3e0; color: #e65100; }
-.status-approved, .status-auto_approved { background: #e8f5e9; color: #2e7d32; }
-.status-submitted { background: #e3f2fd; color: #1565c0; }
-.status-rejected, .status-auto_rejected { background: #ffebee; color: #c62828; }
-.status-archived { background: #f5f5f5; color: #9e9e9e; }
 
-/* Generating overlay */
+.markdown-body :deep(p) {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+  margin: 6px 0;
+}
+
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.markdown-body :deep(li) {
+  margin-bottom: 4px;
+}
+
+.markdown-body :deep(code) {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: var(--bg-soft);
+  color: var(--ink);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.markdown-body :deep(pre) {
+  background: var(--bg-code);
+  color: #e5e5e5;
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.markdown-body :deep(pre code) {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: 12.5px;
+}
+
+.markdown-body :deep(blockquote) {
+  border-left: 2px solid var(--line);
+  padding-left: 12px;
+  color: var(--ink-muted);
+  margin: 8px 0;
+}
+
+.markdown-body :deep(a) {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--line);
+  transition: text-decoration-color 0.15s ease;
+}
+
+.markdown-body :deep(a:hover) {
+  text-decoration-color: var(--ink);
+}
+
+.markdown-body :deep(strong) {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.markdown-body :deep(hr) {
+  border: none;
+  border-top: 1px solid var(--line-soft);
+  margin: 12px 0;
+}
+
+/* ───── Issue edit mode ───── */
+.issue-edit {
+  padding: 4px 0;
+}
+
+.edit-field {
+  margin-bottom: 8px;
+}
+
+.edit-label {
+  font-size: 13px;
+  color: var(--ink-muted);
+  margin-bottom: 4px;
+  display: block;
+}
+
+.edit-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ───── Card-level actions ───── */
+.log-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+}
+
+/* ───── Audit dialog ───── */
+.audit-snapshot {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-soft);
+  color: var(--ink);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  max-height: 200px;
+  overflow: auto;
+  margin-top: 6px;
+}
+
+/* ───── Generating overlay ───── */
 .generating-overlay {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(245, 245, 247, 0.85);
-  backdrop-filter: blur(8px);
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
   animation: fadeIn 0.2s ease;
 }
+
 .generating-card {
-  background: var(--surface, #fff);
-  border-radius: 24px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.12);
-  padding: 48px 60px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 32px 48px;
   text-align: center;
-  animation: slideUp 0.3s ease;
 }
+
 .generating-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--border, rgba(0,0,0,0.08));
-  border-top-color: var(--accent, #0071e3);
+  width: 32px;
+  height: 32px;
+  border: 2px solid var(--line);
+  border-top-color: var(--ink);
   border-radius: 50%;
-  margin: 0 auto 20px;
+  margin: 0 auto 16px;
   animation: spin 0.8s linear infinite;
 }
+
 .generating-text {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 500;
-  color: var(--text-primary, #1d1d1f);
-  margin-bottom: 16px;
+  color: var(--ink-muted);
+  margin-bottom: 12px;
   min-width: 200px;
   transition: opacity 0.3s;
 }
+
 .generating-dots {
   display: flex;
   justify-content: center;
-  gap: 6px;
+  gap: 5px;
 }
+
 .dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: var(--accent, #0071e3);
+  background: var(--ink-muted);
   animation: bounce 1.2s ease-in-out infinite;
 }
+
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
 }
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
-}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
 @keyframes bounce {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-  30% { transform: translateY(-8px); opacity: 1; }
+  30% { transform: translateY(-6px); opacity: 1; }
 }
 </style>

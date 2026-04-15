@@ -1,7 +1,14 @@
 <template>
   <div class="settings-page">
+    <!-- Page header -->
     <div class="page-header">
-      <h2>Settings</h2>
+      <div class="page-header-left">
+        <h2 class="page-title">设置</h2>
+        <div class="page-subtitle">配置采集、LLM、Jira 等运行参数</div>
+      </div>
+      <div class="page-header-right">
+        <el-button type="primary" round @click="saveAll">保存所有</el-button>
+      </div>
     </div>
 
     <!-- Tab Navigation -->
@@ -19,38 +26,49 @@
     <!-- Monitor Tab -->
     <div v-show="activeTab === 'monitor'" class="tab-content">
       <div class="settings-card">
-        <h4 class="card-title">Monitor Configuration</h4>
-        <el-form label-position="top" class="settings-form">
-          <el-form-item label="Sampling Interval (seconds)">
+        <h3 class="card-title">活动采集</h3>
+        <p class="card-description">监控前台活动、OCR 识别与截图保留策略。</p>
+        <el-form label-position="top" class="settings-form two-col">
+          <el-form-item label="采样间隔（秒）">
             <el-input-number v-model="settings.monitor_interval_sec" :min="10" :max="300" />
+            <div class="form-hint">每隔多少秒采集一次前台窗口</div>
           </el-form-item>
-          <el-form-item label="OCR Enabled">
-            <el-switch v-model="settings.monitor_ocr_enabled" />
-          </el-form-item>
-          <el-form-item label="OCR Engine">
+          <el-form-item label="OCR 引擎">
             <el-select v-model="settings.monitor_ocr_engine" style="width: 100%">
-              <el-option label="Auto" value="auto" />
+              <el-option label="自动" value="auto" />
               <el-option label="Vision (macOS)" value="vision" />
               <el-option label="WinOCR (Windows)" value="winocr" />
               <el-option label="Tesseract" value="tesseract" />
             </el-select>
+            <div class="form-hint">留 auto 让系统按平台选择</div>
           </el-form-item>
-          <el-form-item label="Screenshot Retention (days)">
+          <el-form-item label="截图保留天数">
             <el-input-number v-model="settings.monitor_screenshot_retention_days" :min="1" :max="90" />
+            <div class="form-hint">超过后自动清理原始截图</div>
           </el-form-item>
         </el-form>
+
+        <div class="switch-group">
+          <div class="switch-row">
+            <el-switch v-model="settings.monitor_ocr_enabled" />
+            <div class="switch-meta">
+              <div class="switch-label">启用 OCR</div>
+              <div class="switch-hint">对截图做文字识别，作为活动内容的补充</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
     <!-- Git Repos Tab -->
     <div v-show="activeTab === 'git'" class="tab-content">
       <div class="settings-card">
-        <h4 class="card-title">Git Repositories</h4>
-        <p class="card-description">Configure git repositories to track commits from.</p>
+        <h3 class="card-title">Git 仓库</h3>
+        <p class="card-description">配置要追踪提交记录的 Git 仓库路径。</p>
 
-        <el-table :data="gitRepos" style="margin-bottom: 20px">
-          <el-table-column prop="path" label="Path" />
-          <el-table-column prop="author_email" label="Author Email" />
+        <el-table :data="gitRepos" style="margin-bottom: 20px" empty-text="还没有配置仓库">
+          <el-table-column prop="path" label="路径" />
+          <el-table-column prop="author_email" label="作者邮箱" />
           <el-table-column label="" width="80" align="center">
             <template #default="{ row }">
               <el-button text type="danger" @click="removeRepo(row.id)">
@@ -63,25 +81,30 @@
         <div class="add-repo-form">
           <el-input v-model="newRepo.path" placeholder="/path/to/repo" class="repo-input" />
           <el-input v-model="newRepo.author_email" placeholder="email@example.com" class="repo-input" />
-          <el-button type="primary" round @click="addRepo">Add</el-button>
+          <el-button type="primary" round @click="addRepo">添加</el-button>
         </div>
       </div>
     </div>
 
     <!-- Jira Tab -->
     <div v-show="activeTab === 'jira'" class="tab-content">
-      <el-alert type="warning" :closable="true" style="margin-bottom: 16px" v-if="isLocalhost">
-        <template #title>
-          <strong>检测到通过 localhost 访问</strong>
-        </template>
-        如果登录失败（只拿到 1 个 cookie），可能是本地代理（如 Clash）拦截了 localhost 请求。
-        请改用 <a :href="'http://127.0.0.1:' + location.port + location.hash" style="color: var(--accent, #0071e3); font-weight: 600">http://127.0.0.1:{{ location.port }}</a> 访问，可绕过代理。
-      </el-alert>
+      <div v-if="isLocalhost" class="alert-banner warning">
+        <div class="alert-title">检测到通过 localhost 访问</div>
+        <div class="alert-body">
+          如果登录失败（只拿到 1 个 cookie），可能是本地代理（如 Clash）拦截了 localhost 请求。
+          请改用
+          <a :href="'http://127.0.0.1:' + location.port + location.hash">http://127.0.0.1:{{ location.port }}</a>
+          访问，可绕过代理。
+        </div>
+      </div>
+
       <div class="settings-card">
-        <h4 class="card-title">Jira 连接</h4>
-        <el-form label-position="top" class="settings-form">
+        <h3 class="card-title">Jira 连接</h3>
+        <p class="card-description">配置 Jira 服务器地址与认证方式。</p>
+        <el-form label-position="top" class="settings-form two-col">
           <el-form-item label="Server URL">
             <el-input v-model="settings.jira_server_url" placeholder="https://jira.example.com" />
+            <div class="form-hint url-hint">Jira 根地址，不要带路径</div>
           </el-form-item>
           <el-form-item label="认证方式">
             <el-select v-model="settings.jira_auth_mode" style="width: 100%">
@@ -89,30 +112,35 @@
               <el-option label="Bearer Token（PAT）" value="bearer" />
             </el-select>
           </el-form-item>
-          <el-form-item v-if="settings.jira_auth_mode === 'bearer'" label="Personal Access Token">
+          <el-form-item v-if="settings.jira_auth_mode === 'bearer'" label="Personal Access Token" class="full-col">
             <el-input v-model="settings.jira_pat" type="password" show-password />
           </el-form-item>
         </el-form>
       </div>
 
       <div v-if="settings.jira_auth_mode === 'cookie'" class="settings-card" style="margin-top: 16px">
-        <h4 class="card-title">SSO 登录</h4>
-        <p style="font-size: 13px; color: var(--text-secondary, #86868b); margin-bottom: 16px">
+        <div class="card-head-row">
+          <h3 class="card-title">SSO 登录</h3>
+          <span v-if="jiraLoginResult" :class="['status-pill', jiraLoginResult.success ? 'success' : 'danger']">
+            {{ jiraLoginResult.success ? '已登录' : '登录失败' }}
+          </span>
+        </div>
+        <p class="card-description">
           输入帆软账号自动登录 Jira，获取并保存 Cookie。Cookie 过期后重新登录即可。
         </p>
-        <el-form label-position="top" class="settings-form" autocomplete="on">
+        <el-form label-position="top" class="settings-form two-col" autocomplete="on">
           <el-form-item label="手机号">
             <el-input v-model="jiraLogin.mobile" placeholder="18800000000" name="username" autocomplete="username" />
           </el-form-item>
           <el-form-item label="密码">
             <el-input v-model="jiraLogin.password" type="password" show-password placeholder="帆软账号密码" name="password" autocomplete="current-password" />
           </el-form-item>
-          <el-form-item>
+          <el-form-item class="full-col">
             <el-button type="primary" round :loading="jiraLogging" @click="doJiraLogin">
               {{ jiraLogging ? '登录中...' : '登录并获取 Cookie' }}
             </el-button>
-            <span v-if="jiraLoginResult" :style="{ marginLeft: '12px', fontSize: '13px', color: jiraLoginResult.success ? 'var(--success, #34c759)' : 'var(--danger, #ff3b30)' }">
-              {{ jiraLoginResult.success ? '&#10003;' : '&#10007;' }} {{ jiraLoginResult.message }}
+            <span v-if="jiraLoginResult" class="inline-status" :class="{ success: jiraLoginResult.success, danger: !jiraLoginResult.success }">
+              {{ jiraLoginResult.message }}
             </span>
           </el-form-item>
         </el-form>
@@ -122,11 +150,12 @@
     <!-- LLM Tab -->
     <div v-show="activeTab === 'llm'" class="tab-content">
       <div class="settings-card">
-        <h4 class="card-title">LLM 配置</h4>
+        <h3 class="card-title">LLM 引擎</h3>
+        <p class="card-description">用于每日总结、自动审批与活动摘要的模型。</p>
 
         <!-- Quick fill buttons -->
         <div class="quick-fill-row">
-          <span class="quick-fill-label">💡 快速填充：</span>
+          <span class="quick-fill-label">快速填充</span>
           <el-button
             v-for="p in presets" :key="p.name"
             size="small" round
@@ -134,7 +163,7 @@
           >{{ p.name }}</el-button>
         </div>
 
-        <el-form label-position="top" class="settings-form">
+        <el-form label-position="top" class="settings-form two-col">
           <el-form-item label="API 协议">
             <el-select v-model="settings.llm_engine" style="width: 100%">
               <el-option label="OpenAI 兼容（OpenAI / Kimi / DeepSeek / 智谱 / …）" value="openai_compat" />
@@ -142,25 +171,25 @@
               <el-option label="Ollama 本地" value="ollama" />
             </el-select>
           </el-form-item>
-          <el-form-item label="API Key">
-            <el-input v-model="settings.llm_api_key" type="password" show-password placeholder="留空使用系统内置 Kimi Key" />
-          </el-form-item>
           <el-form-item label="Model">
             <el-input v-model="settings.llm_model" :placeholder="modelPlaceholder" />
           </el-form-item>
-          <el-form-item label="Base URL">
+          <el-form-item label="API Key" class="full-col">
+            <el-input v-model="settings.llm_api_key" type="password" show-password placeholder="留空使用系统内置 Kimi Key" />
+          </el-form-item>
+          <el-form-item label="Base URL" class="full-col">
             <el-input v-model="settings.llm_base_url" :placeholder="basePlaceholder" />
             <div class="form-hint">
               填<strong>根地址</strong>，不要带 <code>/chat/completions</code> 等接口路径。留空用默认：
               <code>{{ basePlaceholder }}</code>
             </div>
           </el-form-item>
-          <el-form-item>
+          <el-form-item class="full-col">
             <el-button round :loading="checkingKey" @click="checkLLMKey">
-              {{ checkingKey ? 'Checking...' : 'Test Connection' }}
+              {{ checkingKey ? '测试中...' : '测试连接' }}
             </el-button>
-            <span v-if="keyCheckResult" :style="{ marginLeft: '12px', fontSize: '13px', color: keyCheckResult.valid ? 'var(--success, #34c759)' : 'var(--danger, #ff3b30)' }">
-              {{ keyCheckResult.valid ? '&#10003;' : '&#10007;' }} {{ keyCheckResult.message }}
+            <span v-if="keyCheckResult" class="inline-status" :class="{ success: keyCheckResult.valid, danger: !keyCheckResult.valid }">
+              {{ keyCheckResult.message }}
             </span>
           </el-form-item>
         </el-form>
@@ -170,68 +199,89 @@
     <!-- Prompts Tab -->
     <div v-show="activeTab === 'prompts'" class="tab-content">
       <div class="settings-card">
-        <el-alert type="info" :closable="false" style="margin-bottom: 24px">
-          Prompt 模板控制 LLM 生成工作日志的行为。留空则使用系统默认模板。修改后点击底部「保存」按钮生效。
-        </el-alert>
+        <h3 class="card-title">Prompt 模板</h3>
+        <p class="card-description">
+          控制 LLM 生成工作日志的行为。留空则使用系统默认模板。修改后点击顶部「保存所有」按钮生效。
+        </p>
 
         <div class="prompt-section">
-          <h4 class="card-title">每日日志生成 Prompt</h4>
-          <p class="card-description">
-            <strong>用途：</strong>每天定时触发（默认 18:00）时，系统将当天的活动记录、Git 提交和 Jira 任务列表填入此模板，
-            发送给 LLM，为每个相关 Jira 任务生成一条工作日志草稿。没有 Jira 任务时，会生成一条综合日志。
-          </p>
-          <p class="card-hint">
-            可用变量：<code>{date}</code> 日期、<code>{jira_issues}</code> 活跃任务列表、<code>{git_commits}</code> 当天提交记录、<code>{activities}</code> 活动采集记录
-          </p>
-          <div class="prompt-toolbar">
-            <el-button size="small" link @click="resetPrompt('summarize_prompt')">恢复默认</el-button>
+          <div class="prompt-header">
+            <div>
+              <h4 class="prompt-title">每日日志生成 Prompt</h4>
+              <p class="prompt-desc">每天定时触发时，为每个相关 Jira 任务生成一条工作日志草稿。</p>
+            </div>
+            <el-button size="small" link class="reset-btn" @click="resetPrompt('summarize_prompt')">恢复默认</el-button>
           </div>
-          <el-input v-model="settings.summarize_prompt" type="textarea" :rows="12" />
+          <p class="prompt-vars">
+            可用变量：<code>{date}</code> <code>{jira_issues}</code> <code>{git_commits}</code> <code>{activities}</code>
+          </p>
+          <el-input
+            v-model="settings.summarize_prompt"
+            type="textarea"
+            :rows="14"
+            resize="vertical"
+            class="prompt-textarea"
+          />
         </div>
 
         <div class="prompt-section">
-          <h4 class="card-title">自动审批 Prompt</h4>
-          <p class="card-description">
-            <strong>用途：</strong>在设定的自动审批时间（默认 21:30），如果仍有未审批的每日日志草稿，
-            系统会将每条草稿发送给 LLM 评估质量。合格则自动通过并提交到 Jira，不合格则保持待审批状态等待人工处理。
-          </p>
-          <p class="card-hint">
-            可用变量：<code>{date}</code> 日期、<code>{issue_key}</code> 任务编号、<code>{issue_summary}</code> 任务标题、<code>{time_spent_hours}</code> 工时、<code>{summary}</code> 日志内容、<code>{git_commits}</code> 关联提交
-          </p>
-          <div class="prompt-toolbar">
-            <el-button size="small" link @click="resetPrompt('auto_approve_prompt')">恢复默认</el-button>
+          <div class="prompt-header">
+            <div>
+              <h4 class="prompt-title">自动审批 Prompt</h4>
+              <p class="prompt-desc">在自动审批时间评估未审批的草稿，合格则自动提交到 Jira。</p>
+            </div>
+            <el-button size="small" link class="reset-btn" @click="resetPrompt('auto_approve_prompt')">恢复默认</el-button>
           </div>
-          <el-input v-model="settings.auto_approve_prompt" type="textarea" :rows="12" />
+          <p class="prompt-vars">
+            可用变量：<code>{date}</code> <code>{issue_key}</code> <code>{issue_summary}</code> <code>{time_spent_hours}</code> <code>{summary}</code> <code>{git_commits}</code>
+          </p>
+          <el-input
+            v-model="settings.auto_approve_prompt"
+            type="textarea"
+            :rows="14"
+            resize="vertical"
+            class="prompt-textarea"
+          />
         </div>
 
         <div class="prompt-section">
-          <h4 class="card-title">周报/月报生成 Prompt</h4>
-          <p class="card-description">
-            <strong>用途：</strong>手动点击「总结这周」或「总结当月」时，系统读取该周期内所有每日日志，
-            拼接后发送给 LLM 生成周报或月报。输出为纯文本总结，不提交到 Jira，仅供归档查阅。
-          </p>
-          <p class="card-hint">
-            可用变量：<code>{period_start}</code> 开始日期、<code>{period_end}</code> 结束日期、<code>{period_type}</code> 报告类型（周报/月报）、<code>{daily_logs}</code> 每日日志内容
-          </p>
-          <div class="prompt-toolbar">
-            <el-button size="small" link @click="resetPrompt('period_summary_prompt')">恢复默认</el-button>
+          <div class="prompt-header">
+            <div>
+              <h4 class="prompt-title">周报 / 月报生成 Prompt</h4>
+              <p class="prompt-desc">手动触发时，聚合该周期内所有每日日志生成总结。</p>
+            </div>
+            <el-button size="small" link class="reset-btn" @click="resetPrompt('period_summary_prompt')">恢复默认</el-button>
           </div>
-          <el-input v-model="settings.period_summary_prompt" type="textarea" :rows="12" />
+          <p class="prompt-vars">
+            可用变量：<code>{period_start}</code> <code>{period_end}</code> <code>{period_type}</code> <code>{daily_logs}</code>
+          </p>
+          <el-input
+            v-model="settings.period_summary_prompt"
+            type="textarea"
+            :rows="14"
+            resize="vertical"
+            class="prompt-textarea"
+          />
         </div>
 
         <div class="prompt-section">
-          <h4 class="card-title">活动内容猜测 Prompt</h4>
-          <p class="card-description">
-            <strong>用途：</strong>每条活动入库后，后台 worker 调 LLM 为它生成一段 ≤100 字的「此刻在做什么」摘要，
-            存到 <code>activities.llm_summary</code>。后续每日日志生成时优先用这些语义密度高的摘要替代原始 OCR 片段。
-          </p>
-          <p class="card-hint">
-            可用变量：<code>{prev_summaries}</code> 最近 3 条已成功摘要、<code>{timestamp}</code>、<code>{app_name}</code>、<code>{window_title}</code>、<code>{url}</code>、<code>{tab_title}</code>、<code>{ocr_text}</code>、<code>{wecom_group}</code>
-          </p>
-          <div class="prompt-toolbar">
-            <el-button size="small" link @click="resetPrompt('activity_summary_prompt')">恢复默认</el-button>
+          <div class="prompt-header">
+            <div>
+              <h4 class="prompt-title">活动内容猜测 Prompt</h4>
+              <p class="prompt-desc">后台 worker 为每条活动生成一段 ≤100 字的「此刻在做什么」摘要。</p>
+            </div>
+            <el-button size="small" link class="reset-btn" @click="resetPrompt('activity_summary_prompt')">恢复默认</el-button>
           </div>
-          <el-input v-model="settings.activity_summary_prompt" type="textarea" :rows="12" />
+          <p class="prompt-vars">
+            可用变量：<code>{prev_summaries}</code> <code>{timestamp}</code> <code>{app_name}</code> <code>{window_title}</code> <code>{url}</code> <code>{tab_title}</code> <code>{ocr_text}</code> <code>{wecom_group}</code>
+          </p>
+          <el-input
+            v-model="settings.activity_summary_prompt"
+            type="textarea"
+            :rows="14"
+            resize="vertical"
+            class="prompt-textarea"
+          />
         </div>
       </div>
     </div>
@@ -239,16 +289,29 @@
     <!-- Scheduler Tab -->
     <div v-show="activeTab === 'scheduler'" class="tab-content">
       <div class="settings-card">
-        <h4 class="card-title">定时任务</h4>
-        <el-form label-position="top" class="settings-form">
-          <el-form-item label="启用每日自动生成">
+        <h3 class="card-title">定时任务</h3>
+        <p class="card-description">控制每日生成与自动审批的触发时间。</p>
+
+        <div class="switch-group">
+          <div class="switch-row">
             <el-switch v-model="settings.scheduler_enabled" />
-          </el-form-item>
+            <div class="switch-meta">
+              <div class="switch-label">启用每日自动生成</div>
+              <div class="switch-hint">到点后自动汇总活动与 Git 记录生成日志草稿</div>
+            </div>
+          </div>
+          <div class="switch-row">
+            <el-switch v-model="settings.auto_approve_enabled" />
+            <div class="switch-meta">
+              <div class="switch-label">启用自动审批</div>
+              <div class="switch-hint">到点后评估未审批草稿，合格则自动提交到 Jira</div>
+            </div>
+          </div>
+        </div>
+
+        <el-form label-position="top" class="settings-form two-col" style="margin-top: 24px">
           <el-form-item label="每日日志生成时间">
             <el-time-picker v-model="settings.scheduler_trigger_time" format="HH:mm" value-format="HH:mm" />
-          </el-form-item>
-          <el-form-item label="启用自动审批">
-            <el-switch v-model="settings.auto_approve_enabled" />
           </el-form-item>
           <el-form-item label="自动审批并提交时间">
             <el-time-picker v-model="settings.auto_approve_trigger_time" format="HH:mm" value-format="HH:mm" />
@@ -260,57 +323,67 @@
     <!-- Collectors Tab -->
     <div v-show="activeTab === 'collectors'" class="tab-content">
       <div class="settings-card">
-        <h4 class="card-title">数据采集节点</h4>
-        <p class="card-description">
-          列出所有已注册的 collector。本机自带的 collector 使用 machine_id = <code>local</code>。
-          远程 collector 通过 <code>python -m auto_daily_log_collector</code> 启动。
-        </p>
-
-        <div v-if="collectors.length === 0" style="text-align: center; padding: 32px; color: var(--text-tertiary)">
-          还没有采集节点，首次启动 collector 会自动出现在这里
+        <div class="card-head-row">
+          <div>
+            <h3 class="card-title">数据采集节点</h3>
+            <p class="card-description">
+              列出所有已注册的 collector。本机自带的使用 machine_id = <code>local</code>。
+              远程 collector 通过 <code>python -m auto_daily_log_collector</code> 启动。
+            </p>
+          </div>
+          <el-button size="small" round @click="loadCollectors">
+            <el-icon><Refresh /></el-icon>&nbsp;刷新
+          </el-button>
         </div>
+
+        <el-empty v-if="collectors.length === 0" description="还没有采集节点，首次启动 collector 会自动出现在这里" />
         <el-table v-else :data="collectors" style="width: 100%">
-          <el-table-column label="名称" min-width="140">
+          <el-table-column label="名称" min-width="200">
             <template #default="{ row }">
-              <span style="margin-right: 6px">{{ platformIcon(row.platform) }}</span>
-              <strong>{{ row.name }}</strong>
-              <span v-if="row.hostname" style="color: var(--text-tertiary); font-size: 12px; margin-left: 6px">
-                ({{ row.hostname }})
-              </span>
+              <div class="collector-name">
+                <span
+                  class="status-dot"
+                  :class="row.is_paused ? 'paused' : (isOnline(row) ? 'online' : 'offline')"
+                />
+                <span class="platform-icon">{{ platformIcon(row.platform) }}</span>
+                <strong>{{ row.name }}</strong>
+                <span v-if="row.hostname" class="hostname">({{ row.hostname }})</span>
+              </div>
             </template>
           </el-table-column>
-          <el-table-column label="平台" min-width="160">
+          <el-table-column label="平台" min-width="140">
             <template #default="{ row }">
-              <span style="font-size: 12px; color: var(--text-secondary)">
+              <span class="cell-muted">
                 {{ row.platform_detail || row.platform || '—' }}
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="能力" min-width="180">
+          <el-table-column label="能力" min-width="200">
             <template #default="{ row }">
               <el-tag
                 v-for="cap in row.capabilities" :key="cap"
                 size="small"
-                style="margin-right: 4px; margin-bottom: 2px"
+                round
+                class="cap-pill"
               >{{ cap }}</el-tag>
-              <span v-if="!row.capabilities || row.capabilities.length === 0" style="color: var(--text-tertiary); font-size: 12px">—</span>
+              <span v-if="!row.capabilities || row.capabilities.length === 0" class="cell-muted">—</span>
             </template>
           </el-table-column>
           <el-table-column label="状态" width="100">
             <template #default="{ row }">
-              <span v-if="row.is_paused" class="collector-status paused">已暂停</span>
-              <span v-else-if="isOnline(row)" class="collector-status online">在线</span>
-              <span v-else class="collector-status offline">离线</span>
+              <span v-if="row.is_paused" class="status-pill muted">已暂停</span>
+              <span v-else-if="isOnline(row)" class="status-pill success">在线</span>
+              <span v-else class="status-pill muted">离线</span>
             </template>
           </el-table-column>
-          <el-table-column label="最后心跳" min-width="160">
+          <el-table-column label="最后心跳" min-width="170">
             <template #default="{ row }">
-              <span style="font-size: 12px; color: var(--text-secondary)">
+              <span class="cell-mono">
                 {{ row.last_seen || '—' }}
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="260">
+          <el-table-column label="操作" width="200">
             <template #default="{ row }">
               <el-button
                 v-if="row.is_paused"
@@ -336,43 +409,37 @@
             </template>
           </el-table-column>
         </el-table>
-
-        <div style="margin-top: 16px; display: flex; justify-content: flex-end">
-          <el-button size="small" round @click="loadCollectors">
-            <el-icon><Refresh /></el-icon>&nbsp;刷新
-          </el-button>
-        </div>
       </div>
     </div>
 
     <!-- Recycle Bin Tab -->
     <div v-show="activeTab === 'recycle'" class="tab-content">
       <div class="settings-card">
-        <h4 class="card-title">回收站</h4>
+        <h3 class="card-title">回收站</h3>
         <p class="card-description">
           被删除的活动记录会保留在回收站中，超过 {{ settings.recycle_retention_days || 30 }} 天后自动永久删除。
         </p>
-        <el-form label-position="top" class="settings-form" style="margin-bottom: 20px">
-          <el-form-item label="活动记录保留天数（超过自动移入回收站）">
+        <el-form label-position="top" class="settings-form two-col" style="margin-bottom: 20px">
+          <el-form-item label="活动记录保留天数">
             <el-input-number v-model="settings.activity_retention_days" :min="1" :max="365" />
+            <div class="form-hint">超过此天数自动移入回收站</div>
           </el-form-item>
-          <el-form-item label="回收站保留天数（超过自动永久删除）">
+          <el-form-item label="回收站保留天数">
             <el-input-number v-model="settings.recycle_retention_days" :min="1" :max="365" />
+            <div class="form-hint">超过此天数自动永久删除</div>
           </el-form-item>
         </el-form>
 
-        <div v-if="recycledItems.length === 0" style="text-align: center; padding: 32px; color: var(--text-tertiary)">
-          回收站为空
-        </div>
+        <el-empty v-if="recycledItems.length === 0" description="回收站为空" />
         <el-table v-else :data="recycledItems" style="width: 100%">
           <el-table-column prop="date" label="日期" width="140" />
           <el-table-column prop="count" label="记录数" width="100" />
-          <el-table-column prop="deleted_at" label="删除时间" width="180">
+          <el-table-column prop="deleted_at" label="删除时间" width="200">
             <template #default="{ row }">
-              {{ row.deleted_at?.substring(0, 16) }}
+              <span class="cell-mono">{{ row.deleted_at?.substring(0, 16) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="200">
+          <el-table-column label="操作" width="220">
             <template #default="{ row }">
               <el-button size="small" round @click="restoreDate(row.date)">恢复</el-button>
               <el-popconfirm
@@ -405,20 +472,13 @@
         </div>
       </div>
     </div>
-
-    <!-- Save Button -->
-    <div class="save-bar">
-      <el-button type="primary" round size="large" @click="saveAll">
-        Save All Settings
-      </el-button>
-    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, Delete } from '@element-plus/icons-vue'
 import api from '../api'
 
 const activeTab = ref('monitor')
@@ -642,7 +702,7 @@ async function saveAll() {
     }
     await api.putSetting(key, String(out))
   }
-  ElMessage.success('Settings saved')
+  ElMessage.success('设置已保存')
 }
 
 async function loadRecycled() {
@@ -679,42 +739,80 @@ onMounted(async () => {
 
 <style scoped>
 .settings-page {
-  max-width: 800px;
+  width: 100%;
+  max-width: 960px;
   margin: 0 auto;
 }
 
+/* ───── Page header ───── */
 .page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
   margin-bottom: 24px;
+  gap: 16px;
 }
 
+.page-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.page-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: var(--ink);
+  margin: 0;
+  line-height: 1.2;
+}
+
+.page-subtitle {
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+/* ───── Tab nav (ink underline, no pills) ───── */
 .tab-nav {
   display: flex;
-  gap: 6px;
+  gap: 24px;
   margin-bottom: 24px;
-  flex-wrap: wrap;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
 }
 
 .tab-btn {
-  padding: 8px 18px;
+  position: relative;
+  padding: 10px 0;
   border: none;
   background: transparent;
-  border-radius: 980px;
   font-size: 14px;
-  font-weight: 500;
-  color: var(--text-secondary);
+  font-weight: 400;
+  color: var(--ink-muted);
   cursor: pointer;
-  transition: all 0.2s ease;
   font-family: var(--font);
+  white-space: nowrap;
+  transition: color 0.15s ease;
 }
 
 .tab-btn:hover {
-  background: rgba(0, 0, 0, 0.04);
-  color: var(--text-primary);
+  color: var(--ink);
 }
 
 .tab-btn.active {
-  background: var(--text-primary);
-  color: #fff;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.tab-btn.active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--ink);
 }
 
 .tab-content {
@@ -726,58 +824,156 @@ onMounted(async () => {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* ───── Card chrome ───── */
 .settings-card {
-  background: var(--surface);
+  background: var(--bg);
+  border: 1px solid var(--line);
   border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 28px;
+  padding: 24px;
+  box-shadow: none;
+}
+
+.settings-card + .settings-card {
+  margin-top: 16px;
+}
+
+.card-head-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 4px;
 }
 
 .card-title {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
-  margin-bottom: 4px;
-  color: var(--text-primary);
+  color: var(--ink);
+  margin: 0 0 4px 0;
+  letter-spacing: -0.2px;
 }
 
 .card-description {
-  font-size: 14px;
-  color: var(--text-secondary);
-  margin-bottom: 20px;
+  font-size: 13px;
+  color: var(--ink-muted);
+  margin: 0 0 20px 0;
   line-height: 1.5;
 }
 
-.card-hint {
-  font-size: 13px;
-  color: var(--text-tertiary);
-  margin-bottom: 12px;
-}
-
-.card-hint code {
-  background: rgba(0, 0, 0, 0.05);
-  padding: 2px 6px;
+.card-description code {
+  background: var(--bg-soft);
+  padding: 1px 6px;
   border-radius: 4px;
   font-size: 12px;
-  font-family: "SF Mono", Menlo, Monaco, monospace;
+  font-family: var(--font-mono);
+  color: var(--ink-soft);
 }
 
+/* ───── Forms ───── */
 .settings-form {
-  max-width: 500px;
-  margin-top: 20px;
+  margin-top: 4px;
 }
 
-.settings-form .el-form-item {
-  margin-bottom: 24px;
+.settings-form.two-col {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0 20px;
 }
 
-.prompt-section {
-  margin-bottom: 32px;
+.settings-form.two-col :deep(.el-form-item.full-col) {
+  grid-column: 1 / -1;
 }
 
-.prompt-section:last-child {
-  margin-bottom: 0;
+.settings-form :deep(.el-form-item) {
+  margin-bottom: 20px;
 }
 
+.settings-form :deep(.el-form-item__label) {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  padding-bottom: 6px;
+  line-height: 1.4;
+}
+
+/* Ensure el-input-number and el-time-picker take full width in grid cells */
+.settings-form :deep(.el-input-number),
+.settings-form :deep(.el-date-editor) {
+  width: 100%;
+}
+
+.form-hint {
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+.form-hint code {
+  background: var(--bg-soft);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--ink-soft);
+}
+
+.form-hint strong {
+  color: var(--ink);
+}
+
+.url-hint {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inline-status {
+  margin-left: 12px;
+  font-size: 13px;
+}
+
+.inline-status.success { color: var(--success); }
+.inline-status.danger { color: var(--danger); }
+
+/* ───── Switch groups ───── */
+.switch-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.switch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.switch-row + .switch-row {
+  border-top: 1px solid var(--line-soft);
+}
+
+.switch-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.switch-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.switch-hint {
+  font-size: 12px;
+  color: var(--ink-muted);
+  line-height: 1.4;
+}
+
+/* ───── Git repo add form ───── */
 .add-repo-form {
   display: flex;
   gap: 10px;
@@ -788,70 +984,213 @@ onMounted(async () => {
   flex: 1;
 }
 
-.save-bar {
-  margin-top: 32px;
-  padding-top: 24px;
-  border-top: 1px solid var(--border);
-}
-
+/* ───── LLM quick-fill row ───── */
 .quick-fill-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  margin: 12px 0 20px;
+  margin: 0 0 20px;
   padding: 12px 16px;
-  background: rgba(0, 113, 227, 0.04);
-  border-radius: 12px;
-}
-.quick-fill-label {
-  font-size: 13px;
-  color: var(--text-secondary, #86868b);
-  margin-right: 4px;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
 }
 
-.prompt-toolbar {
+.quick-fill-label {
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin-right: 4px;
+  font-weight: 500;
+}
+
+/* ───── Prompt sections ───── */
+.prompt-section {
+  margin-bottom: 32px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.prompt-section:first-of-type {
+  padding-top: 0;
+  border-top: none;
+}
+
+.prompt-section:last-child {
+  margin-bottom: 0;
+}
+
+.prompt-header {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
   margin-bottom: 8px;
 }
 
-.form-hint {
+.prompt-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0 0 4px 0;
+}
+
+.prompt-desc {
   font-size: 12px;
-  color: var(--text-tertiary, #aeaeb2);
-  margin-top: 6px;
+  color: var(--ink-muted);
+  margin: 0;
   line-height: 1.5;
 }
-.form-hint code {
-  background: rgba(0, 0, 0, 0.05);
+
+.prompt-vars {
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin: 0 0 8px 0;
+  line-height: 1.6;
+}
+
+.prompt-vars code {
+  background: var(--bg-soft);
   padding: 1px 6px;
   border-radius: 4px;
   font-size: 11px;
-  font-family: "SF Mono", Menlo, Monaco, monospace;
-}
-.form-hint strong {
-  color: var(--text-primary, #1d1d1f);
+  font-family: var(--font-mono);
+  color: var(--ink-soft);
+  margin-right: 2px;
 }
 
-.collector-status {
+.reset-btn {
+  flex-shrink: 0;
+}
+
+.prompt-textarea :deep(.el-textarea__inner) {
+  font-family: var(--font-mono) !important;
+  font-size: 12.5px !important;
+  line-height: 1.65 !important;
+  color: var(--ink) !important;
+}
+
+/* ───── Alert banner (custom, no EP blue/yellow) ───── */
+.alert-banner {
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ink-muted);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.alert-banner.warning {
+  border-left-color: var(--warning);
+}
+
+.alert-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.alert-body {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.alert-body a {
+  color: var(--ink);
+  text-decoration: underline;
+  font-weight: 500;
+}
+
+/* ───── Status pill (inline) ───── */
+.status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   padding: 2px 10px;
-  border-radius: 980px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-soft);
+  color: var(--ink-muted);
+  border: 1px solid var(--line);
+  white-space: nowrap;
 }
-.collector-status::before {
-  content: '';
-  width: 6px;
-  height: 6px;
+
+.status-pill.success {
+  background: rgba(16, 163, 127, 0.08);
+  color: var(--success);
+  border-color: rgba(16, 163, 127, 0.25);
+}
+
+.status-pill.danger {
+  background: rgba(209, 69, 59, 0.08);
+  color: var(--danger);
+  border-color: rgba(209, 69, 59, 0.25);
+}
+
+.status-pill.muted {
+  background: var(--bg-soft);
+  color: var(--ink-muted);
+  border-color: var(--line);
+}
+
+/* ───── Collectors table ───── */
+.collector-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
+  flex-shrink: 0;
 }
-.collector-status.online { background: #e8f5e9; color: #2e7d32; }
-.collector-status.online::before { background: #34c759; }
-.collector-status.offline { background: #f5f5f7; color: #86868b; }
-.collector-status.offline::before { background: #aeaeb2; }
-.collector-status.paused { background: #fff3e0; color: #e65100; }
-.collector-status.paused::before { background: #ff9f0a; }
+
+.status-dot.online { background: var(--success); }
+.status-dot.offline { background: var(--ink-dim); }
+.status-dot.paused { background: var(--warning); }
+
+.platform-icon {
+  font-size: 14px;
+}
+
+.hostname {
+  color: var(--ink-muted);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.cell-muted {
+  color: var(--ink-muted);
+  font-size: 12.5px;
+}
+
+.cell-mono {
+  color: var(--ink-muted);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.cap-pill {
+  margin-right: 4px;
+  margin-bottom: 2px;
+}
+
+/* ───── Responsive ───── */
+@media (max-width: 700px) {
+  .settings-form.two-col {
+    grid-template-columns: 1fr;
+  }
+
+  .add-repo-form {
+    flex-direction: column;
+  }
+
+  .page-header {
+    flex-direction: column;
+  }
+}
 </style>
