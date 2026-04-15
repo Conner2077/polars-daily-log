@@ -1,11 +1,27 @@
-# Polars Daily Log
+<div align="center">
 
-**[English](README.md) / 中文**
+<img alt="Polars Daily Log" src="docs/banner.svg" width="100%"/>
 
-你自己的工作活动聚合器。自动抓每台机器的前台活动 + Git commits，
-LLM 总结成日志，可以一键推给 Jira 当工时。
+### 你的每一天，自动从活动记录到工时日志。
 
-**一人一套数据**，数据只在你自己的机器上，不会上传到公网。
+一个本地优先的个人工作活动聚合器。默默记录你每台机器的前台活动 + Git commits，交给 LLM 总结成日志，一键推给 Jira 当工时。
+
+[English](README.md) / 中文
+
+<a href="https://github.com/Conner2077/polars-daily-log/issues">反馈问题</a> · <a href="https://github.com/Conner2077/polars-daily-log/issues/new?labels=feedback">留言</a> · <a href="CHANGELOG.md">更新日志</a> · <a href="docs/release.md">Release 指南</a>
+
+[![Release][release-shield]][release-link]
+[![Stars][stars-shield]][stars-link]
+[![Issues][issues-shield]][issues-link]
+[![License][license-shield]][license-link]
+[![Last commit][last-commit-shield]][last-commit-link]  
+[![Python][python-shield]][python-link]
+[![Platform][platform-shield]][platform-link]
+[![Downloads][downloads-shield]][downloads-link]
+
+🔒 **100% 本地** — 一人一套数据，永远不离开你自己的机器。
+
+</div>
 
 ## 你有几台机器？
 
@@ -241,4 +257,22 @@ bash install.sh              # 自动识别无 wheel → dev 模式（pip instal
 
 ## 许可证
 
-暂为内部 / 试用阶段。
+Apache 2.0。详见 [LICENSE](LICENSE)。
+
+<!-- Badge references -->
+[release-shield]: https://img.shields.io/github/v/release/Conner2077/polars-daily-log?style=flat-square&color=brightgreen&label=release
+[release-link]: https://github.com/Conner2077/polars-daily-log/releases
+[stars-shield]: https://img.shields.io/github/stars/Conner2077/polars-daily-log?style=flat-square&color=yellow
+[stars-link]: https://github.com/Conner2077/polars-daily-log/stargazers
+[issues-shield]: https://img.shields.io/github/issues/Conner2077/polars-daily-log?style=flat-square&color=orange
+[issues-link]: https://github.com/Conner2077/polars-daily-log/issues
+[license-shield]: https://img.shields.io/github/license/Conner2077/polars-daily-log?style=flat-square&color=blue
+[license-link]: https://github.com/Conner2077/polars-daily-log/blob/master/LICENSE
+[last-commit-shield]: https://img.shields.io/github/last-commit/Conner2077/polars-daily-log?style=flat-square
+[last-commit-link]: https://github.com/Conner2077/polars-daily-log/commits/master
+[python-shield]: https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square&logo=python&logoColor=white
+[python-link]: https://www.python.org/downloads/
+[platform-shield]: https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square
+[platform-link]: #前置
+[downloads-shield]: https://img.shields.io/github/downloads/Conner2077/polars-daily-log/total?style=flat-square&color=success
+[downloads-link]: https://github.com/Conner2077/polars-daily-log/releases

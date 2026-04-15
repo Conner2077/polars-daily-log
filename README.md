@@ -1,13 +1,27 @@
-# Polars Daily Log
+<div align="center">
 
-**English / [中文](README_zh.md)**
+<img alt="Polars Daily Log" src="docs/banner.svg" width="100%"/>
 
-Your personal work-activity aggregator. It silently tracks foreground activity
-and Git commits on every machine you work on, asks an LLM to summarize the day,
-and can push the result to Jira as worklogs with one click.
+### Your day, automatically — from activity to worklog.
 
-**One install per person** — your data lives only on your own machines,
-nothing leaves your network.
+A personal, local-first work-activity aggregator. It silently tracks foreground activity and Git commits across all your machines, asks an LLM to summarize the day, and pushes the result to Jira as worklogs with one click.
+
+[中文](README_zh.md) / English
+
+<a href="https://github.com/Conner2077/polars-daily-log/issues">Report Issues</a> · <a href="https://github.com/Conner2077/polars-daily-log/issues/new?labels=feedback">Feedback</a> · <a href="CHANGELOG.md">Changelog</a> · <a href="docs/release.md">Release Guide</a>
+
+[![Release][release-shield]][release-link]
+[![Stars][stars-shield]][stars-link]
+[![Issues][issues-shield]][issues-link]
+[![License][license-shield]][license-link]
+[![Last commit][last-commit-shield]][last-commit-link]  
+[![Python][python-shield]][python-link]
+[![Platform][platform-shield]][platform-link]
+[![Downloads][downloads-shield]][downloads-link]
+
+🔒 **100% local** — one install per person, your data never leaves your own machines.
+
+</div>
 
 ## How many machines do you use?
 
@@ -245,3 +259,21 @@ See [AGENTS.md](AGENTS.md) (Claude Code loads it via `CLAUDE.md → @AGENTS.md`)
 ## License
 
 Apache 2.0. See [LICENSE](LICENSE).
+
+<!-- Badge references -->
+[release-shield]: https://img.shields.io/github/v/release/Conner2077/polars-daily-log?style=flat-square&color=brightgreen&label=release
+[release-link]: https://github.com/Conner2077/polars-daily-log/releases
+[stars-shield]: https://img.shields.io/github/stars/Conner2077/polars-daily-log?style=flat-square&color=yellow
+[stars-link]: https://github.com/Conner2077/polars-daily-log/stargazers
+[issues-shield]: https://img.shields.io/github/issues/Conner2077/polars-daily-log?style=flat-square&color=orange
+[issues-link]: https://github.com/Conner2077/polars-daily-log/issues
+[license-shield]: https://img.shields.io/github/license/Conner2077/polars-daily-log?style=flat-square&color=blue
+[license-link]: https://github.com/Conner2077/polars-daily-log/blob/master/LICENSE
+[last-commit-shield]: https://img.shields.io/github/last-commit/Conner2077/polars-daily-log?style=flat-square
+[last-commit-link]: https://github.com/Conner2077/polars-daily-log/commits/master
+[python-shield]: https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square&logo=python&logoColor=white
+[python-link]: https://www.python.org/downloads/
+[platform-shield]: https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square
+[platform-link]: #prerequisites
+[downloads-shield]: https://img.shields.io/github/downloads/Conner2077/polars-daily-log/total?style=flat-square&color=success
+[downloads-link]: https://github.com/Conner2077/polars-daily-log/releases
