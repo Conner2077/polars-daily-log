@@ -61,8 +61,12 @@
         <div class="card-head">
           <div>
             <div class="card-title">活动时间轴</div>
-            <div class="card-subtitle">12:00 — now · 按 15 分钟聚合</div>
+            <div class="card-subtitle">{{ timelineSubtitle }} · 按 15 分钟聚合</div>
           </div>
+        </div>
+        <div class="timeline-legend">
+          <span class="legend-item"><span class="legend-swatch legend-active"></span>活动</span>
+          <span class="legend-item"><span class="legend-swatch legend-idle"></span>空闲</span>
         </div>
         <div class="timeline-body">
           <TimelineChart :hours="12" :bucket-minutes="15" />
@@ -167,6 +171,13 @@ const weekdayLabel = computed(() => {
   } catch (_) {
     return ''
   }
+})
+
+const timelineSubtitle = computed(() => {
+  const now = new Date()
+  const start = new Date(now.getTime() - 12 * 60 * 60 * 1000)
+  const fmt = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  return `${fmt(start)} — ${fmt(now)}`
 })
 
 function formatHours(v) {
@@ -445,6 +456,36 @@ onMounted(loadData)
   min-width: 0;
 }
 
+.timeline-legend {
+  display: flex;
+  gap: 20px;
+  padding: 0 0 8px;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.legend-active {
+  background: var(--ink);
+}
+
+.legend-idle {
+  background: var(--ink);
+  opacity: 0.25;
+}
+
 .timeline-body {
   /* Let TimelineChart own its height */
 }
@@ -561,19 +602,20 @@ onMounted(loadData)
 .activities-header,
 .activities-row {
   display: grid;
-  /* Mock proportions: time 50 / app 100 / window ~1fr / summary ~1.6fr / machine 80 */
-  grid-template-columns: 50px 100px 1fr 1.6fr 80px;
-  gap: 10px;
+  grid-template-columns: 56px 120px 1fr 1.6fr 80px;
+  gap: 10px 16px;
   align-items: center;
   padding: 5px 4px;
 }
 
 .activities-header {
   border-bottom: 1px solid var(--line);
-  padding-bottom: 6px;
+  padding-top: 8px;
+  padding-bottom: 10px;
   font-size: 11px;
   color: var(--ink-muted);
   font-weight: 500;
+  letter-spacing: 0.02em;
 }
 
 .activities-row {

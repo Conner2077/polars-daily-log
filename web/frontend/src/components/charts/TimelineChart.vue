@@ -56,7 +56,7 @@
         />
       </g>
 
-      <!-- Bars (live data) -->
+      <!-- Bars (live data) — dual bars: active (black) + idle (gray) side by side -->
       <g v-else class="tl-bars" :style="{ transform: `translateX(${shiftPx}px)` }">
         <g
           v-for="(b, idx) in buckets"
@@ -64,50 +64,48 @@
           class="tl-bar-cell"
           :transform="`translate(${idx * bucketPxWidth}, 0)`"
           :style="idx === 0 && shifting ? { opacity: 0 } : {}"
+          @mouseenter="(e) => showTooltip(e, b, idx)"
         >
-          <!-- Idle-only faint bar -->
+          <!-- Active bar (left half of bucket slot) -->
           <g
-            v-if="barMode(b) === 'idle'"
-            class="tl-bar tl-bar-idle"
-            :style="{ transform: `scaleY(${idleScale(b)})` }"
-          >
-            <rect
-              :x="barPadding"
-              :y="VB_H - PAD_BOTTOM - chartHeight"
-              :width="Math.max(2, bucketPxWidth - barPadding * 2)"
-              :height="chartHeight"
-              fill="var(--ink)"
-              fill-opacity="0.25"
-              @mouseenter="(e) => showTooltip(e, b, idx)"
-            />
-          </g>
-
-          <!-- Active bar (with pulse on the newest) -->
-          <g
-            v-else-if="barMode(b) === 'active'"
+            v-if="(b.active_mins || 0) > 0"
             class="tl-bar tl-bar-active"
-            :class="{ 'tl-bar-pulse': idx === buckets.length - 1 }"
+            :class="{ 'tl-bar-pulse': idx === buckets.length - 1 && (b.active_mins || 0) > 0 }"
             :style="{ transform: `scaleY(${activeScale(b)})` }"
           >
             <rect
               :x="barPadding"
               :y="VB_H - PAD_BOTTOM - chartHeight"
-              :width="Math.max(2, bucketPxWidth - barPadding * 2)"
+              :width="Math.max(2, activeBarWidth)"
               :height="chartHeight"
               fill="var(--ink)"
-              @mouseenter="(e) => showTooltip(e, b, idx)"
             />
           </g>
 
-          <!-- Hit area for empty buckets -->
+          <!-- Idle bar (right half, gray) — shown whenever idle_mins > 0 -->
+          <g
+            v-if="(b.idle_mins || 0) > 0"
+            class="tl-bar tl-bar-idle"
+            :style="{ transform: `scaleY(${idleScale(b)})` }"
+          >
+            <rect
+              :x="(b.active_mins || 0) > 0 ? barPadding + activeBarWidth + 1 : barPadding"
+              :y="VB_H - PAD_BOTTOM - chartHeight"
+              :width="Math.max(2, idleBarWidth)"
+              :height="chartHeight"
+              fill="var(--ink)"
+              fill-opacity="0.25"
+            />
+          </g>
+
+          <!-- Hit area for totally empty buckets -->
           <rect
-            v-else
+            v-if="(b.active_mins || 0) === 0 && (b.idle_mins || 0) === 0"
             :x="barPadding"
             :y="VB_H - PAD_BOTTOM - 20"
             :width="Math.max(2, bucketPxWidth - barPadding * 2)"
             :height="20"
             fill="transparent"
-            @mouseenter="(e) => showTooltip(e, b, idx)"
           />
         </g>
       </g>
@@ -213,6 +211,17 @@ const maxActive = computed(() => {
   return m
 })
 
+const maxIdle = computed(() => {
+  let m = 0
+  for (const b of buckets.value) if ((b.idle_mins || 0) > m) m = b.idle_mins
+  return m
+})
+
+// Split each bucket slot into active (left ~60%) + idle (right ~40%)
+const fullBarWidth = computed(() => Math.max(2, bucketPxWidth.value - barPadding * 2))
+const activeBarWidth = computed(() => Math.floor(fullBarWidth.value * 0.58))
+const idleBarWidth = computed(() => fullBarWidth.value - activeBarWidth.value - 1)
+
 const isEmpty = computed(
   () => buckets.value.length > 0 && buckets.value.every((b) => (b.active_mins || 0) === 0),
 )
@@ -239,10 +248,10 @@ function activeScale(b) {
 }
 
 function idleScale(b) {
-  // Idle bars are always small — fixed fraction, scaled by how much idle
-  const idleCap = props.bucketMinutes // at most one bucket's worth of idle
-  const ratio = Math.min(1, (b.idle_mins || 0) / idleCap)
-  return Math.max(0.05, ratio * 0.3)
+  // Scale idle relative to max active (so both share the same y-axis)
+  const ref = maxActive.value > 0 ? maxActive.value : props.bucketMinutes
+  const k = ((b.idle_mins || 0) / ref) * 0.9
+  return Math.max(0.03, k)
 }
 
 // Cursor position inside the window
