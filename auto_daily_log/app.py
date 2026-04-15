@@ -251,6 +251,13 @@ class Application:
                 self.monitor.stop()
             if monitor_task:
                 monitor_task.cancel()
+            # Flush in-progress same-window aggregate to DB before tearing down,
+            # so the last window's tail duration isn't lost on `pdl server stop`.
+            if self.monitor is not None:
+                try:
+                    await self.monitor.close()
+                except Exception as e:
+                    print(f"[Server] monitor close error (non-fatal): {e}")
             if watchdog:
                 watchdog.stop()
             if watchdog_task:

@@ -50,7 +50,13 @@
 - 只做 adapter 不动底层 → 底层没有 API 可调用
 - 两层 class 名不同：底层是 `XxxAPI`，adapter 是 `XxxAdapter`
 
-> **关于"独立可运行"**：当前 `auto_daily_log_collector/platforms/*.py` 直接 `from auto_daily_log.monitor.* import ...` 复用底层 —— 这意味着现阶段 collector **并非真正 standalone**，跑起来仍需 server 包。将来要么把底层搬到 `shared/` 或 collector 内部，要么文档承认这条依赖。设计新平台时先遵守两层约定，重构可以以后再做。
+> **关于"独立可运行"**（2026-04-15 更新）：collector 包现在是真的 standalone。
+> 历史上底层实现在 `auto_daily_log/monitor/`，collector adapter 层通过 import
+> 复用。经过一次大重构后，这些底层模块已整体搬到 `auto_daily_log_collector/monitor_internals/`，
+> collector 代码里不再 `from auto_daily_log.monitor.*`。Server 端（`auto_daily_log/`）
+> 反过来也可以复用 collector 的底座——`CollectorRuntime + LocalSQLiteBackend`
+> 就是 server 内嵌模式（`monitor.enabled=true`）的实现。所以现在是**单向依赖**：
+> server 依赖 collector 包，collector 不依赖 server。
 
 ### 核心模块
 

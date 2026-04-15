@@ -241,9 +241,13 @@ class CollectorRuntime:
             self._trace.log("get_window_title", app=app)
             title = self._adapter.get_window_title(app)
             self._trace.log("got_window_title", app=app, title=title)
+            self._trace.log("get_browser_tab", app=app)
             tab_title, url = self._adapter.get_browser_tab(app)
+            self._trace.log("got_browser_tab", app=app, tab=tab_title, url=url)
             title = tab_title or title
+            self._trace.log("get_wecom_chat", app=app)
             wecom_group = self._adapter.get_wecom_chat_name(app)
+            self._trace.log("got_wecom_chat", app=app, group=wecom_group)
 
         if self._is_blocked(app, url):
             return None
@@ -262,6 +266,7 @@ class CollectorRuntime:
         # Window changed — flush outstanding aggregate
         await self._flush_pending_extend()
 
+        self._trace.log("enrich_start", app=app, title=title)
         enriched = self._enricher.enrich(
             app_name=app,
             window_title=title,
@@ -269,6 +274,12 @@ class CollectorRuntime:
             wecom_group=wecom_group,
             ocr_enabled=self._config.ocr_enabled,
             ocr_engine=self._config.ocr_engine,
+        )
+        self._trace.log(
+            "enrich_done",
+            app=app,
+            category=enriched["category"],
+            has_screenshot=enriched["screenshot_local_path"] is not None,
         )
 
         screenshot_local = enriched["screenshot_local_path"]
