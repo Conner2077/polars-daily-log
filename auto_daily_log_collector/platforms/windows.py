@@ -1,9 +1,9 @@
 """Windows adapter."""
 import platform as _platform
+import subprocess
 from pathlib import Path
 from typing import Optional
 
-from auto_daily_log.monitor.platforms.windows import WindowsAPI
 from auto_daily_log.monitor.idle import get_idle_seconds as _get_idle
 from auto_daily_log.monitor.screenshot import capture_screenshot as _capture
 from shared.schemas import (
@@ -16,6 +16,37 @@ from shared.schemas import (
 )
 
 from .base import PlatformAdapter
+
+
+def _run_powershell(cmd: str) -> Optional[str]:
+    try:
+        result = subprocess.run(["powershell", "-Command", cmd], capture_output=True, text=True, timeout=10)
+        output = result.stdout.strip()
+        return output if output else None
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
+class WindowsAPI:
+    def get_frontmost_app(self) -> Optional[str]:
+        return _run_powershell(
+            "(Get-Process | Where-Object {$_.MainWindowHandle -eq "
+            "(Add-Type -MemberDefinition '[DllImport(\"user32.dll\")] "
+            "public static extern IntPtr GetForegroundWindow();' "
+            "-Name Win32 -PassThru)::GetForegroundWindow()}).ProcessName"
+        )
+
+    def get_window_title(self, app_name: str) -> Optional[str]:
+        return _run_powershell(
+            "(Get-Process | Where-Object {$_.MainWindowHandle -eq "
+            "(Add-Type -MemberDefinition '[DllImport(\"user32.dll\")] "
+            "public static extern IntPtr GetForegroundWindow();' "
+            "-Name Win32 -PassThru)::GetForegroundWindow()}).MainWindowTitle"
+        )
+
+    def get_browser_tab(self, app_name: str) -> tuple[Optional[str], Optional[str]]:
+        title = self.get_window_title(app_name)
+        return title, None
 
 
 class WindowsAdapter(PlatformAdapter):
@@ -48,16 +79,16 @@ class WindowsAdapter(PlatformAdapter):
     def get_window_title(self, app_name: str) -> Optional[str]:
         return self._api.get_window_title(app_name)
 
-    def get_browser_tab(self, app_name: str):
+    def get_browser_tab(self, app_name: str) -> tuple[Optional[str], Optional[str]]:
         return self._api.get_browser_tab(app_name)
 
     def capture_screenshot(self, output_path) -> bool:
-        p = Path(output_path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        result = _capture(p.parent)
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        result = _capture(path.parent)
         if result and result.exists():
-            if str(result) != str(p):
-                result.rename(p)
+            if str(result) != str(path):
+                result.rename(path)
             return True
         return False
 

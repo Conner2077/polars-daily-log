@@ -173,3 +173,12 @@ def test_macos_adapter_frontmost_app_returns_string():
     if app is not None:
         assert isinstance(app, str)
         assert len(app) > 0
+
+
+def test_collector_platform_modules_do_not_import_legacy_monitor_platforms():
+    linux_content = Path("auto_daily_log_collector/platforms/linux.py").read_text(encoding="utf-8")
+    macos_content = Path("auto_daily_log_collector/platforms/macos.py").read_text(encoding="utf-8")
+    windows_content = Path("auto_daily_log_collector/platforms/windows.py").read_text(encoding="utf-8")
+    assert "auto_daily_log.monitor.platforms" not in linux_content
+    assert "auto_daily_log.monitor.platforms" not in macos_content
+    assert "auto_daily_log.monitor.platforms" not in windows_content
