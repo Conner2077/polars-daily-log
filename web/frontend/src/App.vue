@@ -60,16 +60,18 @@
         <template v-if="devicesAvailable">
           <div class="section-label devices-label">DEVICES</div>
           <div class="devices">
-            <div
+            <button
               v-for="d in visibleDevices"
               :key="d.machine_id || d.name"
               class="device-row"
+              :title="d.machine_id ? `查看 ${d.name} 的活动记录` : ''"
+              @click="onDeviceClick(d)"
             >
               <span class="device-dot" :class="{ online: d.online }"></span>
               <span class="device-name" :class="{ dim: !d.online }">{{ d.name }}</span>
               <span v-if="d.primary" class="device-meta">主</span>
               <span v-else-if="!d.online && d.last_seen_text" class="device-meta">{{ d.last_seen_text }}</span>
-            </div>
+            </button>
             <div v-if="devices.length > 5" class="device-more">+{{ devices.length - 5 }} more</div>
           </div>
         </template>
@@ -143,11 +145,18 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import api from './api'
 
 const route = useRoute()
+const router = useRouter()
+
+function onDeviceClick(d) {
+  if (!d.machine_id) return
+  router.push({ path: '/activities', query: { machine: d.machine_id } })
+  mobileOpen.value = false
+}
 
 // ─── Jira status ────────────────────────────────────────────
 const jiraUser = ref(null)
@@ -519,6 +528,18 @@ onBeforeUnmount(() => {
   padding: 6px 8px;
   font-size: 13px;
   color: var(--ink);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  width: 100%;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.device-row:hover {
+  background: rgba(0, 0, 0, 0.04);
 }
 
 .device-dot {

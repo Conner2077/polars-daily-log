@@ -284,15 +284,18 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Search, Refresh, Delete } from '@element-plus/icons-vue'
 import api from '../api'
 import MachineSelector from '../components/MachineSelector.vue'
 
+const route = useRoute()
 const dates = ref([])
 const selectedDate = ref(null)
-const selectedMachine = ref(null)
+// Initialize from ?machine=xxx (e.g. sidebar DEVICES click)
+const selectedMachine = ref(route.query.machine || null)
 const activities = ref([])
 const viewMode = ref('table')
 const machineSel = ref(null)
@@ -468,6 +471,16 @@ async function doSearch() {
 }
 
 onMounted(() => { loadDates(); probeMachines() })
+
+// React to sidebar clicks while already on /activities
+watch(() => route.query.machine, (v) => {
+  const next = v || null
+  if (next !== selectedMachine.value) {
+    selectedMachine.value = next
+    selectedDate.value = null
+    loadDates()
+  }
+})
 </script>
 
 <style scoped>
