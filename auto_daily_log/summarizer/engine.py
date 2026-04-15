@@ -6,6 +6,7 @@ Three canonical protocols:
   - ollama        : Ollama local API
 """
 from abc import ABC, abstractmethod
+from typing import AsyncIterator
 
 from ..config import LLMConfig
 
@@ -17,6 +18,20 @@ class LLMEngine(ABC):
 
     @abstractmethod
     async def generate(self, prompt: str) -> str: ...
+
+    async def generate_stream(self, prompt: str) -> AsyncIterator[str]:
+        """Yield response text as chunks. Default: fall back to full generate() then chunk.
+
+        Subclasses that can talk to a streaming upstream (OpenAI-compatible,
+        Anthropic, Ollama with stream=true) should override this to pass
+        deltas through as they arrive — drastically better chat UX.
+        """
+        result = await self.generate(prompt)
+        if not result:
+            yield ""
+            return
+        for i in range(0, len(result), 32):
+            yield result[i:i + 32]
 
 
 def get_llm_engine(config: LLMConfig) -> LLMEngine:

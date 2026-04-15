@@ -1,17 +1,16 @@
 """Chat endpoint — answers questions over local worklog + activity data.
 
-MVP notes
----------
-* Wire format is deep-chat compatible: SSE events carry JSON payloads
-  ``{"text": "<chunk>"}`` with a final ``[DONE]`` sentinel.
-* The underlying LLMEngine has no streaming method yet, so this endpoint
-  calls ``generate()`` and fake-streams the full response in fixed-size
-  chunks. Swap ``_chunk_text`` for ``engine.generate_stream()`` once the
-  engine grows real streaming.
+Wire format (deep-chat compatible):
+  SSE events carry JSON payloads ``{"text": "<chunk>"}`` with a final
+  ``data: [DONE]`` sentinel. On error: ``{"error": "<msg>"}`` then DONE.
+
+The endpoint delegates token emission to ``LLMEngine.generate_stream`` —
+engines that speak SSE upstream (OpenAI-compatible, etc.) forward deltas
+live; engines without native streaming fall back to the base class's
+fake-stream implementation.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import date, timedelta
 from typing import AsyncGenerator
@@ -27,10 +26,13 @@ from .worklogs import _get_llm_engine_from_settings
 router = APIRouter(tags=["chat"])
 
 
-RECENT_DAYS = 7
-MAX_ACTIVITY_SUMMARIES = 40
-MAX_DRAFT_ROWS = 30
-CHUNK_SIZE = 32
+# Tight defaults keep the prefill small — any LLM/provider answers faster
+# when less context is stuffed in. Callers that genuinely want a wider
+# window can raise ``context_days`` per request (capped at MAX_CONTEXT_DAYS).
+DEFAULT_CONTEXT_DAYS = 2
+MAX_CONTEXT_DAYS = 14
+MAX_ACTIVITY_SUMMARIES = 15
+MAX_DRAFT_ROWS = 10
 
 
 class ChatMessage(BaseModel):
@@ -40,6 +42,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
+    context_days: int | None = None  # override default window; clamped server-side
 
 
 @router.post("/chat")
@@ -50,7 +53,9 @@ async def chat(body: ChatRequest, request: Request):
     history = _format_history(body.messages[:-1] if body.messages else [])
 
     today = date.today()
-    since = (today - timedelta(days=RECENT_DAYS)).isoformat()
+    window = body.context_days if body.context_days is not None else DEFAULT_CONTEXT_DAYS
+    window = max(1, min(window, MAX_CONTEXT_DAYS))
+    since = (today - timedelta(days=window)).isoformat()
 
     summaries = await db.fetch_all(
         "SELECT date, issue_key, full_summary, summary, time_spent_sec "
@@ -63,7 +68,7 @@ async def chat(body: ChatRequest, request: Request):
         "SELECT timestamp, llm_summary FROM activities "
         "WHERE timestamp >= ? "
         "  AND llm_summary IS NOT NULL "
-        "  AND llm_summary <> '(failed)' "
+        "  AND llm_summary NOT IN ('(failed)', '(skipped-risk)') "
         "  AND (deleted_at IS NULL) "
         "ORDER BY timestamp DESC LIMIT ?",
         (since, MAX_ACTIVITY_SUMMARIES),
@@ -82,14 +87,11 @@ async def chat(body: ChatRequest, request: Request):
 
     async def gen() -> AsyncGenerator[str, None]:
         try:
-            response = await llm.generate(prompt)
+            async for chunk in llm.generate_stream(prompt):
+                if chunk:
+                    yield _sse({"text": chunk})
         except Exception as exc:
             yield _sse({"error": f"LLM call failed: {exc}"})
-            yield _sse_done()
-            return
-        for chunk in _chunk_text(response, CHUNK_SIZE):
-            yield _sse({"text": chunk})
-            await asyncio.sleep(0)
         yield _sse_done()
 
     return StreamingResponse(gen(), media_type="text/event-stream")
@@ -116,7 +118,7 @@ def _format_history(messages: list[ChatMessage]) -> str:
 
 def _format_summaries(rows: list[dict]) -> str:
     if not rows:
-        return "(最近 7 天无工作日志)"
+        return "(窗口期内无工作日志)"
     by_date: dict[str, list[dict]] = {}
     for r in rows:
         by_date.setdefault(r["date"], []).append(r)
@@ -148,3 +150,5 @@ def _sse(payload: dict) -> str:
 
 def _sse_done() -> str:
     return "data: [DONE]\n\n"
+
+

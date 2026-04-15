@@ -141,7 +141,7 @@ async def test_skips_soft_deleted(db):
 @pytest.mark.asyncio
 async def test_retries_failed_row(db):
     act_id = await _insert_activity(db)
-    # Pre-mark as failed
+    # Pre-mark as failed (llm_summary_at left NULL — never previously attempted)
     await db.execute("UPDATE activities SET llm_summary = '(failed)' WHERE id = ?", (act_id,))
     engine = MockEngine(responses=["成功识别"])
     summarizer = _make_summarizer(db, engine)
@@ -151,6 +151,52 @@ async def test_retries_failed_row(db):
     assert n == 1
     row = await db.fetch_one("SELECT llm_summary FROM activities WHERE id = ?", (act_id,))
     assert row["llm_summary"] == "成功识别"
+
+
+@pytest.mark.asyncio
+async def test_skips_recently_failed_row_during_cooldown(db):
+    """A row that failed within FAIL_COOLDOWN_HOURS must NOT be retried.
+
+    Prevents the infinite retry loop observed when the upstream LLM
+    permanently rejects certain content (risk-control, persistent 4xx).
+    Provider-agnostic — same behaviour protects every configured engine.
+    """
+    act_id = await _insert_activity(db)
+    # Failed 1 hour ago — well inside the 24h cooldown.
+    await db.execute(
+        "UPDATE activities SET llm_summary='(failed)', "
+        "llm_summary_at=datetime('now', '-1 hours') WHERE id = ?",
+        (act_id,),
+    )
+    engine = MockEngine(responses=["不该被调用"])
+    summarizer = _make_summarizer(db, engine)
+
+    n = await summarizer._process_batch()
+
+    assert n == 0
+    assert engine.calls == []  # never hit the LLM
+    row = await db.fetch_one("SELECT llm_summary FROM activities WHERE id = ?", (act_id,))
+    assert row["llm_summary"] == "(failed)"  # unchanged
+
+
+@pytest.mark.asyncio
+async def test_retries_failed_row_after_cooldown(db):
+    """Once FAIL_COOLDOWN_HOURS elapses, the row becomes eligible again."""
+    act_id = await _insert_activity(db)
+    # Failed 25 hours ago — cooldown expired.
+    await db.execute(
+        "UPDATE activities SET llm_summary='(failed)', "
+        "llm_summary_at=datetime('now', '-25 hours') WHERE id = ?",
+        (act_id,),
+    )
+    engine = MockEngine(responses=["二次尝试成功"])
+    summarizer = _make_summarizer(db, engine)
+
+    n = await summarizer._process_batch()
+
+    assert n == 1
+    row = await db.fetch_one("SELECT llm_summary FROM activities WHERE id = ?", (act_id,))
+    assert row["llm_summary"] == "二次尝试成功"
 
 
 @pytest.mark.asyncio

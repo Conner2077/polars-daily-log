@@ -24,6 +24,12 @@ class ActivitySummarizer:
     POLL_INTERVAL_SEC = 5
     BATCH_SIZE = 10
     PREV_N = 3
+    # Previously-failed rows sit out this long before the worker tries them
+    # again. Prevents a single row the upstream LLM keeps rejecting from
+    # hot-looping and starving the chat endpoint of connections/rate-limit
+    # budget. 24h is generous enough that transient upstream outages self-heal
+    # without user intervention.
+    FAIL_COOLDOWN_HOURS = 24
 
     def __init__(self, db: Database, get_engine: Callable, get_prompt: Callable):
         """
@@ -53,11 +59,27 @@ class ActivitySummarizer:
         self._running = False
 
     async def _process_batch(self) -> int:
-        """Fetch up to BATCH_SIZE pending rows, summarize each. Returns count processed."""
+        """Fetch up to BATCH_SIZE pending rows, summarize each. Returns count processed.
+
+        Selection rules:
+          * Never-attempted rows (``llm_summary IS NULL``) always picked up.
+          * Previously-failed rows (``llm_summary='(failed)'``) are retried only
+            after a cooldown — prevents infinite retry loops on content the
+            upstream provider permanently rejects (e.g. risk-control, 4xx,
+            model-specific refusals). Cooldown is provider-agnostic: any LLM
+            that rejects once gets the same grace period.
+        """
         rows = await self._db.fetch_all(
-            """SELECT id, machine_id, timestamp, app_name, window_title, url, signals
+            f"""SELECT id, machine_id, timestamp, app_name, window_title, url, signals
                FROM activities
-               WHERE (llm_summary IS NULL OR llm_summary='(failed)')
+               WHERE (
+                       llm_summary IS NULL
+                       OR (
+                           llm_summary='(failed)'
+                           AND (llm_summary_at IS NULL
+                                OR llm_summary_at < datetime('now', '-{self.FAIL_COOLDOWN_HOURS} hours'))
+                       )
+                     )
                  AND category != 'idle'
                  AND deleted_at IS NULL
                ORDER BY timestamp ASC LIMIT ?""",

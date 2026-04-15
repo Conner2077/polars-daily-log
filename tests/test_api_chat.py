@@ -13,6 +13,11 @@ from auto_daily_log.web.api import chat as chat_module
 
 
 class _FakeLLM:
+    """Mimics LLMEngine.generate_stream by splitting the response into chunks.
+
+    The real LLMEngine base class yields via an async iterator; we mirror
+    that here so the chat endpoint exercises the same code path.
+    """
     def __init__(self, response: str = "这是助手的回复，用来验证 SSE 流式分块逻辑。"):
         self.response = response
         self.prompts: list[str] = []
@@ -21,10 +26,19 @@ class _FakeLLM:
         self.prompts.append(prompt)
         return self.response
 
+    async def generate_stream(self, prompt: str):
+        self.prompts.append(prompt)
+        for i in range(0, len(self.response), 32):
+            yield self.response[i:i + 32]
+
 
 class _FailingLLM:
     async def generate(self, prompt: str) -> str:
         raise RuntimeError("api key missing")
+
+    async def generate_stream(self, prompt: str):
+        raise RuntimeError("api key missing")
+        yield  # pragma: no cover — keeps this an async generator
 
 
 def _patch_engine(monkeypatch, engine):
@@ -100,6 +114,27 @@ async def test_chat_includes_history(app_client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_chat_context_days_override_is_clamped(app_client, monkeypatch):
+    fake = _FakeLLM()
+    _patch_engine(monkeypatch, fake)
+
+    # Request window beyond MAX_CONTEXT_DAYS — handler should clamp without
+    # error rather than rejecting. Verifies both the plumbing + the clamp.
+    resp = await app_client.post("/api/chat", json={
+        "messages": [{"role": "user", "text": "历史全记录"}],
+        "context_days": 9999,
+    })
+    assert resp.status_code == 200
+
+    # And negative/zero is clamped upward to at least 1 day.
+    resp = await app_client.post("/api/chat", json={
+        "messages": [{"role": "user", "text": "今天"}],
+        "context_days": 0,
+    })
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_chat_pulls_recent_drafts_into_prompt(app_client, monkeypatch):
     # seed a worklog draft for today
     today = date.today().isoformat()
@@ -165,7 +200,7 @@ def test_format_summaries_groups_by_date():
 
 
 def test_format_summaries_empty():
-    assert chat_module._format_summaries([]) == "(最近 7 天无工作日志)"
+    assert chat_module._format_summaries([]) == "(窗口期内无工作日志)"
 
 
 def test_format_history_skips_when_empty():
