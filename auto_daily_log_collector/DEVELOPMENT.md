@@ -11,7 +11,46 @@
 - **Server**（中心节点）：Web UI、SQLite 中心库、LLM 总结、Jira 提交
 - **Collector**（采集节点，本项目）：在每台工作机上运行，采集活动/截图/commits，通过 HTTP 推送到 server
 
-Collector 是一个 **独立可运行 Python 包**（`auto_daily_log_collector/`），不依赖 server 端代码（只依赖 `shared/schemas.py` 的 wire protocol）。
+### 平台代码分两层
+
+加新平台或修 bug **必须先看懂这张图**。写错层是 review 阶段最常见的退回原因。
+
+```
+          Server 内置 collector           Standalone collector
+          (machine_id='local')            (任意机器，推 HTTP 到 server)
+                   │                              │
+                   ▼                              ▼
+          ┌────────────────┐            ┌────────────────────────┐
+          │ MonitorService │            │ PlatformAdapter (契约) │
+          │ (采样循环)      │            │ • platform_id()        │
+          └────────┬───────┘            │ • capabilities()       │
+                   │                     │ • get_frontmost_app()  │
+                   │                     │ • capture_screenshot() │
+                   │                     │ • ...                  │
+                   │                     └───────────┬────────────┘
+                   │                                 │
+                   ▼                                 ▼
+┌────────────────────────────────────────────────────────────────┐
+│ auto_daily_log/monitor/  ← 底层 raw OS API（共享底座）            │
+│   platforms/{macos,linux,windows,gnome_wayland}.py : PlatformAPI│
+│   idle.py / screenshot.py / portal_screencast.py / ocr.py       │
+│   phash.py / classifier.py / watchdog.py                        │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**职责分工**：
+
+| 层 | 位置 | 干什么 | 不干什么 |
+|----|------|--------|----------|
+| 底层 | `auto_daily_log/monitor/` | 调 AppleScript / xdotool / Atspi / gdbus / `screencapture` / gstreamer 等原生 API；返回原始数据 | 不声明 capabilities，不做 HTTP，不关心分布式 |
+| Adapter | `auto_daily_log_collector/platforms/` | 包装底层 API + 声明能力集 + 在 factory 注册 platform_id | 不写新的 OS 调用；发现底层缺东西要先去底层加 |
+
+**加新平台 = 两层都要动**：
+- 只加底层不做 adapter → 分布式 collector 用户完全拿不到
+- 只做 adapter 不动底层 → 底层没有 API 可调用
+- 两层 class 名不同：底层是 `XxxAPI`，adapter 是 `XxxAdapter`
+
+> **关于"独立可运行"**：当前 `auto_daily_log_collector/platforms/*.py` 直接 `from auto_daily_log.monitor.* import ...` 复用底层 —— 这意味着现阶段 collector **并非真正 standalone**，跑起来仍需 server 包。将来要么把底层搬到 `shared/` 或 collector 内部，要么文档承认这条依赖。设计新平台时先遵守两层约定，重构可以以后再做。
 
 ### 核心模块
 
@@ -27,7 +66,7 @@ auto_daily_log_collector/
 │   ├── factory.py        # 根据 OS + 会话类型自动选 adapter
 │   ├── macos.py          # ✅ 已实现
 │   ├── windows.py        # ⚠️  占位实现，待验证/增强
-│   └── linux.py          # ⚠️  X11 能跑，Wayland 基本可用，Headless 占位
+│   └── linux.py          # X11/Wayland/Headless 三个 adapter；Wayland 底层已补（Atspi+portal），但 adapter 尚未接入
 ```
 
 ---
