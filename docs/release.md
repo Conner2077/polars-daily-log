@@ -8,7 +8,7 @@
 
 ## 前置
 
-- 本机 clone 仓库，`.venv` 已装好 (`./adl install` 跑过)
+- 本机 clone 仓库，`.venv` 已装好 (`./pdl install` 跑过)
 - Node.js 18+（前端构建用）
 - 所有改动已 commit 到 main 分支，`git status` 干净
 
@@ -118,9 +118,9 @@ tar xzf /path/to/release/polars-daily-log-0.2.0.tar.gz
 cd polars-daily-log-0.2.0
 
 # 用 env 非交互模式装 collector
-ADL_ROLE=collector \
-ADL_SERVER_URL=http://127.0.0.1:8888 \
-ADL_COLLECTOR_NAME=release-test \
+PDL_ROLE=collector \
+PDL_SERVER_URL=http://127.0.0.1:8888 \
+PDL_COLLECTOR_NAME=release-test \
   bash install.sh
 
 # 预期：Verification 阶段全 ✓
@@ -164,9 +164,9 @@ Polars Daily Log v0.2.0
 下载：<链接>
 升级方式（已经装过的）：
   cd 你解压过的目录
-  ./adl stop
+  ./pdl stop
   tar xzf 新版tarball --strip-components=1
-  ./adl build --restart
+  ./pdl build --restart
 
 主要变化：<changelog 前 2-3 点>
 ```

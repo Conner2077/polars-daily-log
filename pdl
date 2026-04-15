@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ─── Auto Daily Log — unified CLI ────────────────────────────────────
 # Usage:
-#   ./adl server {start|stop|restart|status|logs [N]}
-#   ./adl collector {start|stop|restart|status|logs [N]}
-#   ./adl {start|stop|restart|status}       # acts on BOTH
-#   ./adl install                            # run installer
-#   ./adl clean                              # remove pid/log files
+#   ./pdl server {start|stop|restart|status|logs [N]}
+#   ./pdl collector {start|stop|restart|status|logs [N]}
+#   ./pdl {start|stop|restart|status}       # acts on BOTH
+#   ./pdl install                            # run installer
+#   ./pdl clean                              # remove pid/log files
 # ─────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -13,14 +13,14 @@ set -euo pipefail
 # ─── Paths & config ──────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/.venv"
-STATE_DIR="${ADL_STATE_DIR:-$HOME/.auto_daily_log}"
+STATE_DIR="${PDL_STATE_DIR:-$HOME/.auto_daily_log}"
 PID_DIR="$STATE_DIR/pids"
 LOG_DIR="$STATE_DIR/logs"
 mkdir -p "$PID_DIR" "$LOG_DIR"
 
-SERVER_CONFIG="${ADL_SERVER_CONFIG:-$SCRIPT_DIR/config.yaml}"
-COLLECTOR_CONFIG="${ADL_COLLECTOR_CONFIG:-$SCRIPT_DIR/collector.yaml}"
-SERVER_PORT="${ADL_SERVER_PORT:-8888}"
+SERVER_CONFIG="${PDL_SERVER_CONFIG:-$SCRIPT_DIR/config.yaml}"
+COLLECTOR_CONFIG="${PDL_COLLECTOR_CONFIG:-$SCRIPT_DIR/collector.yaml}"
+SERVER_PORT="${PDL_SERVER_PORT:-8888}"
 
 SERVER_PIDFILE="$PID_DIR/server.pid"
 SERVER_LOG="$LOG_DIR/server.log"
@@ -44,7 +44,7 @@ info() { echo "${BLUE}→${NC} $1"; }
 activate_venv() {
     if [[ ! -f "$VENV_DIR/bin/activate" ]]; then
         err "Virtual env not found at $VENV_DIR"
-        err "Run './adl install' first."
+        err "Run './pdl install' first."
         exit 1
     fi
     # shellcheck disable=SC1091
@@ -350,7 +350,7 @@ do_build() {
         shift
     done
 
-    [[ -d "$VENV_DIR" ]] || { err "Virtual env missing. Run './adl install' first."; exit 1; }
+    [[ -d "$VENV_DIR" ]] || { err "Virtual env missing. Run './pdl install' first."; exit 1; }
     activate_venv
 
     local platform
@@ -358,7 +358,7 @@ do_build() {
         Darwin) platform="macos" ;;
         Linux)  platform="linux" ;;
         MINGW*|MSYS*|CYGWIN*)
-            err "Native Windows not supported by this script. Use WSL2 + run './adl build' inside."
+            err "Native Windows not supported by this script. Use WSL2 + run './pdl build' inside."
             exit 1 ;;
         *) err "Unsupported platform: $(uname -s)"; exit 1 ;;
     esac
@@ -396,7 +396,7 @@ do_build() {
         server_stop || true
         server_start
     else
-        warn "Server not restarted. Run './adl server restart' to pick up backend changes, or re-run with --restart"
+        warn "Server not restarted. Run './pdl server restart' to pick up backend changes, or re-run with --restart"
     fi
 }
 
@@ -410,11 +410,11 @@ do_clean() {
 # ─── Usage ───────────────────────────────────────────────────────────
 usage() {
     cat <<EOF
-${BOLD}Auto Daily Log — CLI${NC}
+${BOLD}Polars Daily Log — CLI${NC}
 
 ${BOLD}USAGE${NC}
-  ./adl <component> <action> [options]
-  ./adl <action>                 (applies to both server + collector)
+  ./pdl <component> <action> [options]
+  ./pdl <action>                 (applies to both server + collector)
 
 ${BOLD}COMPONENTS${NC}
   server       the central web server
@@ -439,19 +439,19 @@ ${BOLD}TOP-LEVEL${NC}
   help         show this message
 
 ${BOLD}COLLECTOR EXTRAS${NC}
-  ./adl collector uninstall      deregister on server + wipe local state
+  ./pdl collector uninstall      deregister on server + wipe local state
 
 ${BOLD}ENV OVERRIDES${NC}
-  ADL_SERVER_PORT=8888           server listen port
-  ADL_SERVER_CONFIG=...          path to config.yaml
-  ADL_COLLECTOR_CONFIG=...       path to collector.yaml
-  ADL_STATE_DIR=~/.auto_daily_log  where pid/log live
+  PDL_SERVER_PORT=8888           server listen port
+  PDL_SERVER_CONFIG=...          path to config.yaml
+  PDL_COLLECTOR_CONFIG=...       path to collector.yaml
+  PDL_STATE_DIR=~/.auto_daily_log  where pid/log live
 
 ${BOLD}EXAMPLES${NC}
-  ./adl start                    start everything
-  ./adl server logs -f           tail server log
-  ./adl collector status
-  ADL_SERVER_PORT=9000 ./adl server start
+  ./pdl start                    start everything
+  ./pdl server logs -f           tail server log
+  ./pdl collector status
+  PDL_SERVER_PORT=9000 ./pdl server start
 EOF
 }
 

@@ -104,7 +104,7 @@ class MonitorService:
         # Skip screenshot if frontmost app is hostile to screen capture
         # DEBUG MODE: set to False to disable protection and reproduce crash
         import os
-        _debug_no_skip = os.environ.get("ADL_DEBUG_NO_SKIP") == "1"
+        _debug_no_skip = os.environ.get("PDL_DEBUG_NO_SKIP") == "1"
         app_lower = (app or "").lower()
         hostile_ss = {s.lower() for s in self._config.hostile_apps_screenshot}
         skip_screenshot = (not _debug_no_skip) and (app_lower in hostile_ss)

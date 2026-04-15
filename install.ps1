@@ -358,7 +358,7 @@ function Invoke-Verify {
 function Show-Summary {
     Write-Header 'Done!'
     Write-Host ''
-    Write-Host '  Manage via .\adl.ps1 (Windows equivalent of ./adl):' -ForegroundColor White
+    Write-Host '  Manage via .\adl.ps1 (Windows equivalent of ./pdl):' -ForegroundColor White
     if ($script:InstallServer) {
         Write-Host '    .\adl.ps1 server start       # start the Web UI + API'
         Write-Host '    .\adl.ps1 server status'

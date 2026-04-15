@@ -11,7 +11,7 @@
 #       auto_daily_log-<version>-py3-none-any.whl
 #     install.sh
 #     install.ps1
-#     adl
+#     pdl
 #     config.yaml.example
 #     collector.yaml.example
 #     README.md
@@ -106,7 +106,7 @@ info "Assembling release tarball..."
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR/wheels"
 cp "$WHEEL_PATH" "$STAGE_DIR/wheels/"
-cp install.sh install.ps1 adl "$STAGE_DIR/"
+cp install.sh install.ps1 pdl "$STAGE_DIR/"
 cp config.yaml.example collector.yaml.example "$STAGE_DIR/" 2>/dev/null || {
     # If examples are missing, use current configs as templates
     [[ -f config.yaml ]] && cp config.yaml "$STAGE_DIR/config.yaml.example"
@@ -128,7 +128,7 @@ echo "  Wheel:      $WHEEL_PATH"
 echo "  Stage dir:  $STAGE_DIR"
 echo ""
 echo "  To test install locally:"
-echo "    mkdir -p /tmp/adl-test && cd /tmp/adl-test"
+echo "    mkdir -p /tmp/pdl-test && cd /tmp/pdl-test"
 echo "    tar xzf $TARBALL"
 echo "    cd polars-daily-log-$VERSION"
 echo "    bash install.sh"

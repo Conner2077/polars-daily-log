@@ -72,8 +72,8 @@ LLM 总结成日志，可以一键推给 Jira 当工时。
 5. **启动**
 
    ```bash
-   ./adl server start            # 场景 A 或 hub
-   ./adl collector start         # 场景 B
+   ./pdl server start            # 场景 A 或 hub
+   ./pdl collector start         # 场景 B
    ```
 
 6. **打开 `http://127.0.0.1:8888`**（或 hub 机器 IP）看自己的日志。首次进去 Settings 配一下：
@@ -88,19 +88,19 @@ LLM 总结成日志，可以一键推给 Jira 当工时。
 
 | 场景 | 命令 |
 |------|------|
-| 启动 | `./adl start`（server + collector 一起）|
-| 只启 server | `./adl server start` |
-| 只启 collector | `./adl collector start` |
-| 看状态 | `./adl status` |
-| 停 | `./adl stop` |
-| 重启 | `./adl restart` |
+| 启动 | `./pdl start`（server + collector 一起）|
+| 只启 server | `./pdl server start` |
+| 只启 collector | `./pdl collector start` |
+| 看状态 | `./pdl status` |
+| 停 | `./pdl stop` |
+| 重启 | `./pdl restart` |
 
 ### 日志 / 调试
 
 ```bash
-./adl server logs 100         # server 后端 log
-./adl server logs -f          # 实时跟
-./adl collector logs 50       # collector log
+./pdl server logs 100         # server 后端 log
+./pdl server logs -f          # 实时跟
+./pdl collector logs 50       # collector log
 ```
 
 ### Windows 上的等价操作
@@ -135,13 +135,13 @@ Web UI 右上角 💡 按钮 — 写几句就行，后台自动附当前页面 +
 
 ```bash
 # 停服务
-./adl stop
+./pdl stop
 
 # 解压新 tarball 覆盖当前目录（venv 保留，数据在 ~/ 下也在）
 tar xzf polars-daily-log-0.2.0.tar.gz --strip-components=1
 
 # 从新 wheel 重装 Python 部分，前端 dist 也在 wheel 里
-./adl build --restart
+./pdl build --restart
 ```
 
 如果 release notes 说有 config 迁移，会在 `CHANGELOG.md` 顶部明确写出来。
@@ -151,7 +151,7 @@ tar xzf polars-daily-log-0.2.0.tar.gz --strip-components=1
 ## 卸载
 
 ```bash
-./adl stop
+./pdl stop
 cd ..
 rm -rf polars-daily-log-0.1.0/        # 代码 + venv + 配置
 rm -rf ~/.auto_daily_log              # 数据 + 日志（不想删日志就跳过）
@@ -174,7 +174,7 @@ Unregister-ScheduledTask -TaskName AutoDailyLogCollector -Confirm:$false
 | 当日总结只有 "Activity summary: ..." 行 | LLM 调用失败 → Web UI Settings 检查 engine / URL / API Key 对得上 |
 | 提交 Jira 返 500 "内部服务器错误" | comment 含 emoji。新版已自动去除，升级一下 |
 | 企业微信 2-4 分钟自退 | 确认 `config.yaml` 里 `monitor.hostile_apps_applescript` 包含 `企业微信/wechat/wecom` |
-| 前端白屏 | `./adl server logs 50` 看后端；硬刷浏览器 Cmd+Shift+R |
+| 前端白屏 | `./pdl server logs 50` 看后端；硬刷浏览器 Cmd+Shift+R |
 | Windows collector 不动 | 看 `%USERPROFILE%\.auto_daily_log_collector\logs\collector.log`；检查 Scheduled Task 状态 |
 
 ---
@@ -192,15 +192,15 @@ Unregister-ScheduledTask -TaskName AutoDailyLogCollector -Confirm:$false
 git clone <repo-url>
 cd polars-daily-log
 bash install.sh              # 自动识别无 wheel → dev 模式（pip install -e . + 前端源码构建）
-./adl server start
+./pdl server start
 ```
 
 ### 日常
 
 | 场景 | 命令 |
 |------|------|
-| pull 后重新 build | `./adl build --restart` |
-| 只重建前端 | `./adl build --no-python` |
+| pull 后重新 build | `./pdl build --restart` |
+| 只重建前端 | `./pdl build --no-python` |
 | 跑测试 | `.venv/bin/python -m pytest tests/ -q` |
 | 前端热更新开发 | `cd web/frontend && npm run dev` 打开 `localhost:5173` |
 

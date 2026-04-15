@@ -14,10 +14,10 @@ VENV_DIR="$INSTALL_DIR/.venv"
 MIN_PYTHON="3.9"
 
 # Role selection (server / collector / both / ask)
-# Override via env: ADL_ROLE=collector ADL_SERVER_URL=http://... ADL_COLLECTOR_NAME=foo bash install.sh
-ROLE="${ADL_ROLE:-ask}"
-SERVER_URL_INPUT="${ADL_SERVER_URL:-}"
-COLLECTOR_NAME_INPUT="${ADL_COLLECTOR_NAME:-}"
+# Override via env: PDL_ROLE=collector PDL_SERVER_URL=http://... PDL_COLLECTOR_NAME=foo bash install.sh
+ROLE="${PDL_ROLE:-ask}"
+SERVER_URL_INPUT="${PDL_SERVER_URL:-}"
+COLLECTOR_NAME_INPUT="${PDL_COLLECTOR_NAME:-}"
 INSTALL_SERVER=0
 INSTALL_COLLECTOR=0
 
@@ -50,7 +50,7 @@ resolve_role() {
                 3) ROLE="both" ;;
             esac
             ;;
-        *) fail "Unknown ADL_ROLE: $ROLE (must be server/collector/both/ask)"; exit 1 ;;
+        *) fail "Unknown PDL_ROLE: $ROLE (must be server/collector/both/ask)"; exit 1 ;;
     esac
 
     [[ "$ROLE" == "server"    || "$ROLE" == "both" ]] && INSTALL_SERVER=1
@@ -360,13 +360,13 @@ setup_data() {
             read -rp "  Server URL [$default_url]: " server_url
             server_url="${server_url:-$default_url}"
         else
-            info "Server URL: $server_url (from ADL_SERVER_URL)"
+            info "Server URL: $server_url (from PDL_SERVER_URL)"
         fi
         if [[ -z "$name" ]]; then
             read -rp "  Collector display name [$default_name]: " name
             name="${name:-$default_name}"
         else
-            info "Collector name: $name (from ADL_COLLECTOR_NAME)"
+            info "Collector name: $name (from PDL_COLLECTOR_NAME)"
         fi
 
         # Inject into template (first-match sed replacement on the canonical keys)
@@ -467,19 +467,19 @@ assert r.returncode == 0, r.stderr
 summary() {
     header "Done!"
     echo ""
-    echo -e "  ${BOLD}Next steps${NC} (via ./adl):"
+    echo -e "  ${BOLD}Next steps${NC} (via ./pdl):"
     if (( INSTALL_SERVER )); then
-        echo "    ./adl server start             # start the Web UI + API"
-        echo "    ./adl server status"
-        echo "    ./adl server logs 100"
+        echo "    ./pdl server start             # start the Web UI + API"
+        echo "    ./pdl server status"
+        echo "    ./pdl server logs 100"
         echo "    Open http://127.0.0.1:8888 in browser"
     fi
     if (( INSTALL_COLLECTOR )); then
-        echo "    ./adl collector start          # push activity to server"
-        echo "    ./adl collector status"
+        echo "    ./pdl collector start          # push activity to server"
+        echo "    ./pdl collector status"
     fi
     if (( INSTALL_SERVER && INSTALL_COLLECTOR )); then
-        echo "    ./adl start                    # start both"
+        echo "    ./pdl start                    # start both"
     fi
     echo ""
     if [ "$PLATFORM" = "macos" ]; then
