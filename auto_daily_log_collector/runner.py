@@ -1,15 +1,14 @@
 """Collector runtime — samples activities and pushes to any StorageBackend.
 
-This is the single loop that drives the built-in collector (when the
-server runs with ``monitor.enabled = true``) and standalone collector
-processes. The two modes differ only in which ``StorageBackend`` gets
-injected:
-
-- Built-in: ``LocalSQLiteBackend`` (writes straight to the server's DB).
-- Standalone: ``HTTPBackend`` (POSTs batches to a remote server).
+This is the single loop that drives both the built-in collector (when
+the server runs with ``monitor.enabled = true``) and standalone collector
+processes. Both paths use the same ``HTTPBackend`` against ``/api/ingest/*``
+— the built-in variant just talks to ``127.0.0.1:<server.port>`` over
+loopback and skips HTTP registration because the server wrote its own
+row directly.
 
 The loop itself — same-window aggregation, idle detection, hostile-app
-handling, enrichment — is identical in both modes.
+handling, enrichment — is shared.
 """
 import asyncio
 import socket
@@ -71,9 +70,10 @@ class CollectorRuntime:
             server's built-in collector (``"local"``).
         skip_http_register
             When True, :meth:`ensure_registered` returns immediately
-            after confirming backend + machine_id are present. Required
-            whenever ``backend`` is not an ``HTTPBackend`` (e.g. the
-            built-in ``LocalSQLiteBackend``).
+            after confirming backend + machine_id are present. Used by
+            the server's built-in collector (which UPSERTs its own
+            collectors row directly in-process before starting the
+            runtime).
         """
         self._config = config
         self._adapter: PlatformAdapter = adapter or create_adapter()
@@ -119,8 +119,9 @@ class CollectorRuntime:
                 )
             if self._backend is None:
                 raise RuntimeError(
-                    "skip_http_register=True requires a backend (e.g. "
-                    "LocalSQLiteBackend) in the constructor"
+                    "skip_http_register=True requires a backend "
+                    "(HTTPBackend with a pre-provisioned token) in the "
+                    "constructor"
                 )
             return self._machine_id
 

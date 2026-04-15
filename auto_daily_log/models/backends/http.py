@@ -52,8 +52,12 @@ class HTTPBackend(StorageBackend):
         return await self._send("activities", activities, machine_id)
 
     async def save_commits(self, machine_id: str, commits: list[CommitPayload]) -> int:
-        ids = await self._send("commits", commits, machine_id)
-        return len(ids)
+        # _send returns ``accepted`` for commits (see _post_batch); for
+        # activities it returns the inserted row IDs.
+        result = await self._send("commits", commits, machine_id)
+        if isinstance(result, int):
+            return result
+        return len(result)
 
     async def extend_duration(self, machine_id: str, row_id: int, extra_sec: int) -> None:
         """Ask the server to add ``extra_sec`` to ``row_id``'s duration.
@@ -112,22 +116,25 @@ class HTTPBackend(StorageBackend):
             pass
         return None
 
-    async def _send(self, kind: str, payload_list: list, machine_id: str) -> list[int]:
+    async def _send(self, kind: str, payload_list: list, machine_id: str):
+        """Dispatch a batch. Returns list[int] row IDs for activities or
+        int accepted-count for commits."""
         if not payload_list:
-            return []
+            return 0 if kind == "commits" else []
 
         # First try to drain any queued items
         await self._drain_queue(machine_id)
 
         try:
-            ids = await self._post_batch(kind, payload_list, machine_id)
-            return ids
+            return await self._post_batch(kind, payload_list, machine_id)
         except (httpx.HTTPError, Exception) as e:
             # Persist to disk queue for retry
             self._enqueue(kind, payload_list, machine_id)
-            return []
+            return 0 if kind == "commits" else []
 
-    async def _post_batch(self, kind: str, payload_list: list, machine_id: str) -> list[int]:
+    async def _post_batch(self, kind: str, payload_list: list, machine_id: str):
+        """POST a batch. Returns list[int] of row IDs for activities,
+        int accepted count for commits."""
         client = self._get_client()
         if kind == "activities":
             req = ActivityIngestRequest(activities=payload_list)
@@ -145,6 +152,8 @@ class HTTPBackend(StorageBackend):
         )
         r.raise_for_status()
         data = r.json()
+        if kind == "commits":
+            return int(data.get("accepted", 0))
         first = data.get("first_id")
         last = data.get("last_id")
         if first is not None and last is not None:

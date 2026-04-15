@@ -1,16 +1,16 @@
 """Storage backend abstraction.
 
-Monitor code writes activities/commits through this interface. Two
-implementations:
+Monitor code writes activities/commits through this interface. Only one
+implementation today:
 
-- LocalSQLiteBackend — writes directly to SQLite (in-process, used by
-  the server's built-in collector for backwards compatibility).
-- HTTPBackend — POSTs batches to a remote server over HTTP (used by
-  standalone collector processes).
+- HTTPBackend — POSTs batches to an Auto Daily Log server over HTTP.
+  Used by both standalone collector processes and the server's own
+  in-process collector (via loopback 127.0.0.1), so the ingest path is
+  identical regardless of where the collector runs.
 
-The interface is intentionally small: just `save_activities`,
-`save_commits`, `heartbeat`. Keeping it small makes the HTTP contract
-simple and testable.
+The interface is intentionally small: just ``save_activities``,
+``save_commits``, ``heartbeat``, ``extend_duration``, ``save_screenshot``.
+Keeping it small keeps the HTTP contract simple and testable.
 """
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -51,11 +51,12 @@ class StorageBackend(ABC):
     async def save_screenshot(self, machine_id: str, local_path: Path) -> str:
         """Persist a screenshot and return the path to store in activity signals.
 
-        - LocalSQLiteBackend: file already on disk under the server's
-          screenshot dir; returns ``str(local_path)`` unchanged.
-        - HTTPBackend: uploads the image over multipart to
-          ``/api/ingest/screenshot`` and returns the server-side path from
-          the response (what gets baked into the activity signals JSON).
+        HTTPBackend uploads the image over multipart to
+        ``/api/ingest/screenshot`` and returns the server-side path from
+        the response (what gets baked into the activity signals JSON).
+        For the loopback in-process collector the upload writes into the
+        same screenshot dir the file already lives in — wasteful but
+        correct; unifying the data path is worth the extra copy.
         """
         ...
 

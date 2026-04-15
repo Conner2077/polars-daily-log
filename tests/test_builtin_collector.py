@@ -1,16 +1,22 @@
-"""Tests for the built-in collector — CollectorRuntime + LocalSQLiteBackend.
+"""Tests for the built-in collector — CollectorRuntime + HTTPBackend
+driven against the real FastAPI app over an in-memory ASGI transport.
 
-Mirrors the classic MonitorService behaviour: inserts into the real DB,
-aggregates same-window samples, and picks up settings-table overrides
-via the LocalSQLiteBackend.heartbeat() path.
+After phase 4 the built-in and external collectors both push through
+``/api/ingest/*``. These tests verify the built-in path end-to-end: the
+runtime samples, enriches, POSTs, the server authenticates the Bearer
+token, inserts rows, and subsequent samples aggregate into the same row
+(or roll over on window switch / idle).
 """
+import hashlib
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
-from auto_daily_log.models.backends import LocalSQLiteBackend
+from auto_daily_log.models.backends import HTTPBackend
 from auto_daily_log.models.database import Database
+from auto_daily_log.web.app import create_app
 from auto_daily_log_collector.config import CollectorConfig
 from auto_daily_log_collector.enricher import ActivityEnricher
 from auto_daily_log_collector.runner import CollectorRuntime
@@ -30,11 +36,43 @@ def _make_adapter(app="Visual Studio Code", title="main.py", url=None, idle=0.0)
 
 
 async def _make_builtin(tmp_path, adapter, **cfg_overrides):
+    """Build a CollectorRuntime wired to an in-memory FastAPI instance.
+
+    Mirrors what Application._register_builtin_collector +
+    _make_builtin_collector do at runtime:
+      - UPSERT collectors row with machine_id='local' + token_hash
+      - HTTPBackend with that plaintext token
+      - httpx.AsyncClient routed via ASGITransport to the FastAPI app
+    """
     db = Database(tmp_path / "t.db", embedding_dimensions=128)
     await db.initialize()
-    backend = LocalSQLiteBackend(db)
+
+    token = "tk-builtin-test-" + "x" * 24
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    await db.execute(
+        """INSERT INTO collectors
+           (machine_id, name, hostname, platform, platform_detail,
+            capabilities, token_hash, last_seen, is_active)
+           VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), 1)""",
+        ("local", "Built-in (this machine)", "test-host", "macos",
+         "macOS test", json.dumps(["screenshot", "idle"]), token_hash),
+    )
+
+    app = create_app(db)
+    backend = HTTPBackend(
+        server_url="http://testserver",
+        token=token,
+        queue_dir=tmp_path / "queue-local",
+    )
+    backend._client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        timeout=5.0,
+        headers={"Authorization": f"Bearer {token}"},
+        base_url="http://testserver",
+    )
+
     config = CollectorConfig(
-        server_url="http://builtin.local",
+        server_url="http://testserver",
         name="Built-in (this machine)",
         interval_sec=30,
         idle_threshold_sec=180,
@@ -59,13 +97,13 @@ async def _make_builtin(tmp_path, adapter, **cfg_overrides):
         skip_http_register=True,
     )
     await runtime.ensure_registered()
-    return runtime, db
+    return runtime, db, backend
 
 
 @pytest.mark.asyncio
 async def test_builtin_inserts_activity_with_local_machine_id(tmp_path):
     adapter = _make_adapter()
-    runtime, db = await _make_builtin(tmp_path, adapter)
+    runtime, db, backend = await _make_builtin(tmp_path, adapter)
     try:
         await runtime.sample_once()
         rows = await db.fetch_all("SELECT * FROM activities")
@@ -75,13 +113,14 @@ async def test_builtin_inserts_activity_with_local_machine_id(tmp_path):
         assert rows[0]["category"] == "coding"
         assert rows[0]["duration_sec"] == 30
     finally:
+        await backend.close()
         await db.close()
 
 
 @pytest.mark.asyncio
 async def test_builtin_same_window_accumulates_into_one_row(tmp_path):
     adapter = _make_adapter()
-    runtime, db = await _make_builtin(tmp_path, adapter)
+    runtime, db, backend = await _make_builtin(tmp_path, adapter)
     try:
         await runtime.sample_once()
         await runtime.sample_once()
@@ -102,13 +141,14 @@ async def test_builtin_same_window_accumulates_into_one_row(tmp_path):
         assert rows[1]["app_name"] == "Safari"
         assert rows[1]["duration_sec"] == 30
     finally:
+        await backend.close()
         await db.close()
 
 
 @pytest.mark.asyncio
 async def test_builtin_idle_creates_single_row_and_aggregates(tmp_path):
     adapter = _make_adapter(idle=300.0)
-    runtime, db = await _make_builtin(tmp_path, adapter)
+    runtime, db, backend = await _make_builtin(tmp_path, adapter)
     try:
         await runtime.sample_once()  # first idle insert
         await runtime.sample_once()
@@ -120,13 +160,14 @@ async def test_builtin_idle_creates_single_row_and_aggregates(tmp_path):
         assert rows[0]["app_name"] == "System"
         assert rows[0]["duration_sec"] == 90  # 30 + 30 + 30
     finally:
+        await backend.close()
         await db.close()
 
 
 @pytest.mark.asyncio
 async def test_builtin_heartbeat_picks_up_settings_override(tmp_path):
     adapter = _make_adapter()
-    runtime, db = await _make_builtin(tmp_path, adapter)
+    runtime, db, backend = await _make_builtin(tmp_path, adapter)
     try:
         # Simulate the UI flipping ocr_enabled = true + interval = 45
         await db.execute(
@@ -146,26 +187,28 @@ async def test_builtin_heartbeat_picks_up_settings_override(tmp_path):
         assert runtime.config.ocr_enabled is True
         assert runtime.config.interval_sec == 45
     finally:
+        await backend.close()
         await db.close()
 
 
 @pytest.mark.asyncio
 async def test_builtin_blocked_app_not_recorded(tmp_path):
     adapter = _make_adapter(app="1Password", title="Vault")
-    runtime, db = await _make_builtin(tmp_path, adapter, blocked_apps=["1Password"])
+    runtime, db, backend = await _make_builtin(tmp_path, adapter, blocked_apps=["1Password"])
     try:
         result = await runtime.sample_once()
         assert result is None
         rows = await db.fetch_all("SELECT * FROM activities")
         assert rows == []
     finally:
+        await backend.close()
         await db.close()
 
 
 @pytest.mark.asyncio
 async def test_builtin_hostile_app_skips_title_probe_and_still_inserts(tmp_path):
     adapter = _make_adapter(app="WeCom", title="group-chat")
-    runtime, db = await _make_builtin(tmp_path, adapter)
+    runtime, db, backend = await _make_builtin(tmp_path, adapter)
     try:
         await runtime.sample_once()
 
@@ -177,4 +220,5 @@ async def test_builtin_hostile_app_skips_title_probe_and_still_inserts(tmp_path)
         assert rows[0]["app_name"] == "WeCom"
         assert rows[0]["window_title"] is None
     finally:
+        await backend.close()
         await db.close()
