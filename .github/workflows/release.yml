@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build tarball + publish GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+
+      - name: Install Python build dep
+        run: python -m pip install --upgrade pip build
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag version matches pyproject.toml
+        run: |
+          TAG_VERSION="${{ steps.version.outputs.version }}"
+          PY_VERSION=$(grep -E '^version\s*=' pyproject.toml | head -1 | cut -d'"' -f2)
+          if [[ "$TAG_VERSION" != "$PY_VERSION" ]]; then
+            echo "Tag version ($TAG_VERSION) does not match pyproject.toml ($PY_VERSION)" >&2
+            exit 1
+          fi
+          echo "Version match: $TAG_VERSION"
+
+      - name: Build release tarball
+        run: bash scripts/release.sh
+
+      - name: Extract CHANGELOG section
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if [[ ! -f CHANGELOG.md ]]; then
+            echo "notes_file=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Extract the block starting with "## [VERSION]" up to (but not including) the next "## ["
+          awk -v v="## [$VERSION]" '
+            $0 ~ "^## \\[" {
+              if (found) exit
+              if (index($0, v) == 1) { found=1; print; next }
+            }
+            found { print }
+          ' CHANGELOG.md > /tmp/release-notes.md
+          if [[ ! -s /tmp/release-notes.md ]]; then
+            echo "No CHANGELOG section found for $VERSION" >&2
+            echo "Release $VERSION" > /tmp/release-notes.md
+          fi
+          echo "notes_file=/tmp/release-notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TARBALL="release/polars-daily-log-${VERSION}.tar.gz"
+          WHEEL="dist/auto_daily_log-${VERSION}-py3-none-any.whl"
+          NOTES="${{ steps.changelog.outputs.notes_file }}"
+
+          ARGS=(release create "v${VERSION}" "$TARBALL" "$WHEEL" --title "v${VERSION}")
+          if [[ -n "$NOTES" && -f "$NOTES" ]]; then
+            ARGS+=(--notes-file "$NOTES")
+          else
+            ARGS+=(--generate-notes)
+          fi
+          gh "${ARGS[@]}"
