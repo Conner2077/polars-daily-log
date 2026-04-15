@@ -77,9 +77,9 @@
             v-if="totalMins(b) > 0"
             :class="['tl-bar', isIdleDominant(b) ? 'tl-bar-idle' : 'tl-bar-active', { 'tl-bar-pulse': idx === buckets.length - 1 }]"
             :x="BAR_GAP"
-            :y="VB_H - PAD_BOTTOM - totalPx(b)"
+            :y="VB_H - PAD_BOTTOM - barPx(b)"
             :width="barW"
-            :height="totalPx(b)"
+            :height="barPx(b)"
             rx="1.5"
             :fill="'var(--ink)'"
             :fill-opacity="isIdleDominant(b) ? 0.22 : 1"
@@ -233,7 +233,18 @@ const maxTotal = computed(() => {
 
 function totalMins(b) { return (b.active_mins || 0) + (b.idle_mins || 0) }
 function isIdleDominant(b) { return (b.idle_mins || 0) > totalMins(b) * 0.5 }
-function totalPx(b) { return (totalMins(b) / maxTotal.value) * chartHeight * 0.92 }
+// Bar height based on active_mins only (idle just determines color).
+// For idle-dominant buckets, use idle_mins for height so they're visible but capped.
+function barPx(b) {
+  const active = b.active_mins || 0
+  const idle = b.idle_mins || 0
+  if (active > 0) {
+    return (active / maxActive.value) * chartHeight * 0.88
+  }
+  // Idle-only: show a short bar (capped at 30% of chart height)
+  const idleRatio = Math.min(1, idle / props.bucketMinutes)
+  return idleRatio * chartHeight * 0.3
+}
 
 // Keep for tooltip
 function activeScale(b) {
