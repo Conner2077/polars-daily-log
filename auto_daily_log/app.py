@@ -30,6 +30,10 @@ class Application:
         # start/stop lifecycle management.
         self.monitor = None
         self.scheduler: AsyncIOScheduler = None
+        # Plaintext token the built-in collector uses when calling
+        # /api/ingest/* over loopback HTTP. Generated once and persisted
+        # to the settings table; survives restarts.
+        self._builtin_token: str = None
 
     async def _init_db(self) -> None:
         data_dir = self.config.system.resolved_data_dir
@@ -96,12 +100,15 @@ class Application:
         """Auto-register the built-in monitor as collector machine_id='local'.
 
         Idempotent — upserts on each server start with fresh platform detection.
-        The token_hash is set to a sentinel that the normal auth path cannot
-        match (no collector ever sends this); the built-in monitor writes
-        directly to DB, not via the HTTP ingest path.
+        Also mints/reads a plaintext token (stored in ``settings``) and writes
+        its sha256 hash onto ``collectors.token_hash`` so the built-in
+        collector can authenticate against ``/api/ingest/*`` over loopback HTTP
+        just like any external collector.
         """
+        import hashlib
         import json
         import platform as _platform
+        import secrets
         import socket as _socket
 
         try:
@@ -117,6 +124,25 @@ class Application:
             platform_detail = f"{_platform.system()} {_platform.release()}"
             capabilities = []
 
+        # Step 1: mint / load the built-in token (idempotent across restarts)
+        token_row = await self.db.fetch_one(
+            "SELECT value FROM settings WHERE key = ?",
+            ("builtin_collector_token",),
+        )
+        if token_row and token_row["value"]:
+            token = token_row["value"]
+        else:
+            token = "tk-builtin-" + secrets.token_urlsafe(24)
+            await self.db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                ("builtin_collector_token", token),
+            )
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        self._builtin_token = token
+
+        # Step 2: UPSERT the collectors row with current platform info +
+        # the freshly-computed token_hash (so rotating the settings value
+        # automatically rotates auth).
         existing = await self.db.fetch_one(
             "SELECT id FROM collectors WHERE machine_id = ?", ("local",)
         )
@@ -124,10 +150,11 @@ class Application:
             await self.db.execute(
                 """UPDATE collectors
                    SET platform = ?, platform_detail = ?, capabilities = ?,
-                       hostname = ?, last_seen = datetime('now'), is_active = 1
+                       hostname = ?, token_hash = ?,
+                       last_seen = datetime('now'), is_active = 1
                    WHERE machine_id = ?""",
                 (platform_id, platform_detail, json.dumps(capabilities),
-                 _socket.gethostname(), "local"),
+                 _socket.gethostname(), token_hash, "local"),
             )
         else:
             await self.db.execute(
@@ -137,7 +164,7 @@ class Application:
                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), 1)""",
                 ("local", "Built-in (this machine)", _socket.gethostname(),
                  platform_id, platform_detail, json.dumps(capabilities),
-                 "__builtin_no_http_auth__"),
+                 token_hash),
             )
 
     def _init_scheduler(self) -> None:
