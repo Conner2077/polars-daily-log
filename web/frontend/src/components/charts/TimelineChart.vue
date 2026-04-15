@@ -297,7 +297,13 @@ async function refetch() {
       signal: abortCtrl.signal,
     })
     const data = res.data || {}
-    const incoming = Array.isArray(data.buckets) ? data.buckets : []
+    const bucketMins = data.bucket_minutes || props.bucketMinutes
+    // Map API shape (bucket_start) → internal shape (start/end as ISO strings)
+    const incoming = (Array.isArray(data.buckets) ? data.buckets : []).map((b) => {
+      const s = new Date(b.bucket_start)
+      const e = new Date(s.getTime() + bucketMins * 60000)
+      return { ...b, start: b.bucket_start, end: e.toISOString() }
+    })
 
     // Detect bucket-boundary advance to trigger shift animation
     const newestStart = incoming.length ? incoming[incoming.length - 1].start : null

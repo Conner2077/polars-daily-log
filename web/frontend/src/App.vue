@@ -637,6 +637,7 @@ onBeforeUnmount(() => {
   min-height: 100vh;
   padding: 32px 40px 48px;
   box-sizing: border-box;
+  background: var(--bg-soft);  /* #fafafa — cards are #fff, creates subtle lift */
 }
 
 /* ────────────── Feedback dialog ────────────── */
