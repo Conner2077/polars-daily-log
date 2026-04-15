@@ -48,10 +48,11 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install "python@${{ matrix.python }}"
-          BREW_PREFIX=$(brew --prefix "python@${{ matrix.python }}")
-          echo "$BREW_PREFIX/libexec/bin" >> "$GITHUB_PATH"
-          echo "$BREW_PREFIX/bin" >> "$GITHUB_PATH"
-          "$BREW_PREFIX/bin/python${{ matrix.python }}" -c "import sqlite3; conn=sqlite3.connect(':memory:'); conn.enable_load_extension(True); print('sqlite extensions OK')"
+          BREW_PY="$(brew --prefix python@${{ matrix.python }})/bin/python${{ matrix.python }}"
+          "$BREW_PY" -c "import sqlite3; c=sqlite3.connect(':memory:'); c.enable_load_extension(True); print('sqlite extensions OK')"
+          # brew python is PEP 668 externally-managed; use a venv so pip install works
+          "$BREW_PY" -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Install system deps (Linux)
         if: runner.os == 'Linux'
