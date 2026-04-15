@@ -61,7 +61,7 @@
             :class="['primary-tab', { active: !isToday }]"
             @click="toggleHistoryOpen"
           >
-            历史
+            {{ historyTabLabel }}
           </button>
           <div class="history-inline">
             <button
@@ -347,6 +347,14 @@ const historyFilters = [
 const isToday = ref(true)
 const historyOpen = ref(false)
 let closeHistoryTimer = null
+
+// Label for the primary tab — shows selected sub-filter when
+// user has picked one, else just "过去".
+const historyTabLabel = computed(() => {
+  if (isToday.value) return '过去'
+  const match = historyFilters.find(t => t.value === activeTag.value)
+  return match ? match.label : '过去'
+})
 
 function selectToday() {
   isToday.value = true
