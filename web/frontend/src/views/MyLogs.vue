@@ -124,8 +124,19 @@
       <template v-if="isDailyTag(draft) && parseIssues(draft.summary)">
         <div v-for="(issue, idx) in parseIssues(draft.summary)" :key="idx" class="issue-section">
           <div class="issue-header">
-            <div style="display: flex; align-items: center; gap: 8px">
-              <span class="log-issue">{{ issue.issue_key }}</span>
+            <div class="issue-header-left">
+              <a
+                v-if="!isSkippedIssue(issue.issue_key) && jiraIssueUrl(issue.issue_key)"
+                class="log-issue log-issue-link"
+                :href="jiraIssueUrl(issue.issue_key)"
+                target="_blank" rel="noopener"
+              >{{ issue.issue_key }}</a>
+              <span v-else class="log-issue">{{ issue.issue_key }}</span>
+              <span
+                v-if="issueTitle(issue.issue_key)"
+                class="issue-title"
+                :title="issueTitle(issue.issue_key)"
+              >{{ issueTitle(issue.issue_key) }}</span>
               <span v-if="isSkippedIssue(issue.issue_key)" class="skip-hint">（需改为真实 Issue Key 才可提交）</span>
               <span class="issue-hours">{{ issue.time_spent_hours }}h</span>
             </div>
@@ -247,6 +258,28 @@ const customRange = ref(null)
 const generating = ref(false)
 const generatingText = ref('')
 const submittingIssue = ref(null)
+const jiraServerUrl = ref('')
+const issueTitleMap = ref({})   // { 'PLS-4387': '2026 Q1 任务记录', ... }
+
+function jiraIssueUrl(key) {
+  if (!jiraServerUrl.value || !key) return null
+  return `${jiraServerUrl.value.replace(/\/$/, '')}/browse/${key}`
+}
+
+function issueTitle(key) {
+  return issueTitleMap.value[key] || ''
+}
+
+async function loadJiraContext() {
+  try {
+    const [settingsRes, issuesRes] = await Promise.all([api.getSettings(), api.getIssues()])
+    const urlRow = settingsRes.data.find(s => s.key === 'jira_server_url')
+    jiraServerUrl.value = urlRow?.value || ''
+    issueTitleMap.value = Object.fromEntries(
+      issuesRes.data.map(i => [i.issue_key, i.summary || ''])
+    )
+  } catch { /* silent — link + title are enhancements, not critical */ }
+}
 
 const tagFilters = [
   { label: '全部', value: '' },
@@ -448,7 +481,7 @@ async function showAudit(id) {
   auditVisible.value = true
 }
 
-onMounted(loadDrafts)
+onMounted(() => { loadJiraContext(); loadDrafts() })
 </script>
 
 <style scoped>
@@ -496,15 +529,57 @@ onMounted(loadDrafts)
   font-size: 14px;
   color: var(--text-secondary, #86868b);
 }
+/* Issue-key pill — small, filled, links get subtle underline on hover */
 .log-issue {
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--accent, #0071e3);
+  background: rgba(0, 113, 227, 0.08);
+  border-radius: 6px;
+  letter-spacing: 0.2px;
+  flex-shrink: 0;
+  line-height: 1.5;
+}
+.log-issue-link {
+  text-decoration: none;
+  transition: background 0.15s;
+}
+.log-issue-link:hover {
+  background: rgba(0, 113, 227, 0.16);
+}
+.issue-title {
+  font-size: 13px;
+  color: var(--text-secondary, #86868b);
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
-/* Issue sections within a daily card */
+/* Issue sections within a daily card — left accent rail groups the block */
 .issue-section {
+  position: relative;
   border-bottom: 1px solid var(--border, rgba(0,0,0,0.04));
+  padding-left: 3px;
+  transition: background 0.15s;
+}
+.issue-section::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 10px; bottom: 10px;
+  width: 3px;
+  background: var(--accent, #0071e3);
+  opacity: 0.25;
+  border-radius: 2px;
+  transition: opacity 0.15s;
+}
+.issue-section:hover::before {
+  opacity: 0.6;
 }
 .issue-section:last-child {
   border-bottom: none;
@@ -523,16 +598,36 @@ onMounted(loadDrafts)
   justify-content: space-between;
   align-items: center;
   padding: 10px 20px 0;
+  gap: 12px;
 }
+.issue-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+/* Hours chip — neutral gray pill, subtler than the issue-key pill */
 .issue-hours {
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--text-secondary, #86868b);
+  color: var(--text-secondary, #6e6e73);
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 5px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
 .issue-body {
-  padding: 4px 20px 12px;
+  padding: 6px 20px 14px;
   font-size: 14px;
-  line-height: 1.7;
+  line-height: 1.65;
+  color: var(--text-primary, #1d1d1f);
+}
+.issue-body p {
+  margin: 0;
   color: var(--text-primary, #1d1d1f);
 }
 .markdown-body :deep(h1),

@@ -59,6 +59,8 @@ export default {
     return api.post('/worklogs/generate', data)
   },
   getWorklogsByTag: (tag) => api.get('/worklogs', { params: { tag } }),
+  submitFeedback: (type, content, page, userAgent) =>
+    api.post('/feedback', { type, content, page, user_agent: userAgent }),
   search: (q, limit = 20, sourceType = null) => {
     const params = { q, limit }
     if (sourceType) params.source_type = sourceType

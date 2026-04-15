@@ -21,6 +21,9 @@
         </div>
 
         <div class="nav-right">
+          <button class="feedback-btn" @click="feedbackOpen = true" title="反馈">
+            <span class="feedback-icon">💡</span>
+          </button>
           <router-link v-if="jiraUser" to="/settings" class="jira-status connected">
             <span class="jira-dot"></span>
             {{ jiraUser }}
@@ -33,6 +36,41 @@
       </div>
     </nav>
 
+    <!-- Feedback Dialog -->
+    <el-dialog
+      v-model="feedbackOpen"
+      title="给我们反馈"
+      width="480px"
+      :close-on-click-modal="false"
+    >
+      <div class="feedback-types">
+        <button
+          v-for="t in feedbackTypes" :key="t.value"
+          class="type-chip"
+          :class="{ active: feedbackType === t.value }"
+          @click="feedbackType = t.value"
+          type="button"
+        >{{ t.label }}</button>
+      </div>
+      <el-input
+        v-model="feedbackContent"
+        type="textarea"
+        :rows="5"
+        :maxlength="2000"
+        show-word-limit
+        :placeholder="placeholder"
+      />
+      <template #footer>
+        <el-button round @click="feedbackOpen = false">取消</el-button>
+        <el-button
+          type="primary" round
+          :loading="feedbackSubmitting"
+          :disabled="!feedbackContent.trim()"
+          @click="submitFeedback"
+        >提交</el-button>
+      </template>
+    </el-dialog>
+
     <!-- Main Content -->
     <main class="main-content">
       <router-view />
@@ -41,12 +79,53 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import api from './api'
 
 const route = useRoute()
 const jiraUser = ref(null)
+
+const feedbackOpen = ref(false)
+const feedbackType = ref('suggestion')
+const feedbackContent = ref('')
+const feedbackSubmitting = ref(false)
+
+const feedbackTypes = [
+  { value: 'bug',        label: '🐛 Bug' },
+  { value: 'suggestion', label: '💡 建议' },
+  { value: 'other',      label: '💬 其他' },
+]
+
+const placeholderMap = {
+  bug: '遇到了什么异常？什么操作复现的？',
+  suggestion: '希望它怎么变得更好？',
+  other: '想说什么都可以～',
+}
+const placeholder = computed(() => placeholderMap[feedbackType.value] || '')
+
+async function submitFeedback() {
+  const content = feedbackContent.value.trim()
+  if (!content) return
+  feedbackSubmitting.value = true
+  try {
+    await api.submitFeedback(
+      feedbackType.value,
+      content,
+      route.fullPath || window.location.pathname,
+      navigator.userAgent || '',
+    )
+    ElMessage.success('感谢反馈，已收到！')
+    feedbackOpen.value = false
+    feedbackContent.value = ''
+    feedbackType.value = 'suggestion'
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '提交失败，请稍后再试')
+  } finally {
+    feedbackSubmitting.value = false
+  }
+}
 
 async function checkJiraStatus() {
   try {
@@ -153,6 +232,56 @@ function isActive(path) {
 
 .nav-right {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.feedback-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  border-radius: 980px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  transition: background 0.2s;
+}
+.feedback-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+.feedback-icon {
+  filter: grayscale(0.2);
+}
+
+.feedback-types {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.type-chip {
+  flex: 1;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary, #86868b);
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.type-chip:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+.type-chip.active {
+  color: var(--accent, #0071e3);
+  background: rgba(0, 113, 227, 0.08);
+  border-color: rgba(0, 113, 227, 0.25);
 }
 
 .jira-status {
