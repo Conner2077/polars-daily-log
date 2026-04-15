@@ -37,7 +37,7 @@
       </div>
 
       <div class="card stat-card">
-        <div class="stat-label">Worklog 草稿</div>
+        <div class="stat-label">MyLog</div>
         <div class="stat-value-line">
           <span class="stat-value">{{ extended.pending_drafts_count ?? 0 }}</span>
           <span class="stat-unit">待审批</span>
@@ -75,7 +75,7 @@
 
       <div class="card split-right">
         <div class="card-head">
-          <div class="card-title">待审批 Worklog 草稿</div>
+          <div class="card-title">待审批 MyLog</div>
           <router-link to="/my-logs" class="card-link">全部审批 →</router-link>
         </div>
         <div class="drafts-list" v-if="drafts.length">

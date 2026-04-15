@@ -3,7 +3,7 @@
     <!-- Page header -->
     <div class="page-header">
       <div class="page-header-left">
-        <h2 class="page-title">Worklog 草稿</h2>
+        <h2 class="page-title">MyLog</h2>
         <div class="page-subtitle">{{ headerSubtitle }}</div>
       </div>
       <div class="page-header-right">
@@ -78,7 +78,7 @@
     <!-- Empty state -->
     <el-empty
       v-if="drafts.length === 0"
-      description="该日期暂无 Worklog 草稿"
+      description="该日期暂无 MyLog"
       class="empty-card"
     />
 

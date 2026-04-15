@@ -252,6 +252,7 @@ const NAV_ICONS = {
   activities: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
   drafts: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 2h8a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" stroke-width="1.3"/><path d="M6 6h4M6 9h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
   issues: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3"/><path d="M8 5v3.5l2.5 1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  chat: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 3h10a1 1 0 011 1v6a1 1 0 01-1 1H6l-3 3V4a1 1 0 011-1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><circle cx="6" cy="7.5" r="0.8" fill="currentColor"/><circle cx="9" cy="7.5" r="0.8" fill="currentColor"/><circle cx="12" cy="7.5" r="0.8" fill="currentColor"/></svg>',
   search: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.3"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
   settings: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>',
   feedback: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12v8H5l-3 3V3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
@@ -268,11 +269,12 @@ const navLinks = computed(() => [
   },
   {
     path: '/my-logs',
-    label: 'Worklog 草稿',
+    label: 'MyLog',
     icon: NAV_ICONS.drafts,
     badge: pendingReviewCount.value || null,
     actionable: pendingReviewCount.value > 0,
   },
+  { path: '/chat', label: 'Chat', icon: NAV_ICONS.chat },
   { path: '/issues', label: 'Issues', icon: NAV_ICONS.issues },
   { path: '/settings', label: '设置', icon: NAV_ICONS.settings },
 ])
