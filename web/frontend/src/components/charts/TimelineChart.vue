@@ -98,6 +98,28 @@
         </g>
       </g>
 
+      <!-- Day boundary dashed lines (midnight) with date labels -->
+      <g v-if="!loading" class="tl-day-boundary">
+        <g v-for="b in dayBoundaries" :key="`day-${b.label}`" :transform="`translate(${b.x}, 0)`">
+          <line
+            :x1="0"
+            :x2="0"
+            :y1="PAD_TOP"
+            :y2="VB_H - PAD_BOTTOM"
+            stroke="var(--ink-muted)"
+            stroke-width="0.8"
+            stroke-dasharray="4 4"
+          />
+          <text
+            :x="3"
+            :y="PAD_TOP - 2"
+            class="tl-day-label"
+          >
+            {{ b.label }}
+          </text>
+        </g>
+      </g>
+
       <!-- X-axis hour labels -->
       <g v-if="!loading" class="tl-axis">
         <text
@@ -258,6 +280,26 @@ const cursorX = computed(() => {
   const clamped = Math.min(Math.max(nowMs.value, windowStart), windowEndMs.value)
   const frac = (clamped - windowStart) / windowMs.value
   return frac * VB_W
+})
+
+// Midnight boundaries inside the window — one vertical dashed line per
+// day change, with a small "MM-DD" label at the top of the line.
+const dayBoundaries = computed(() => {
+  const out = []
+  const windowStart = windowEndMs.value - windowMs.value
+  const d = new Date(windowStart)
+  // Move to the next midnight >= windowStart (local time)
+  d.setHours(0, 0, 0, 0)
+  if (d.getTime() < windowStart) d.setDate(d.getDate() + 1)
+  while (d.getTime() <= windowEndMs.value) {
+    const t = d.getTime()
+    const frac = (t - windowStart) / windowMs.value
+    const x = frac * VB_W
+    const label = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    out.push({ x, label })
+    d.setDate(d.getDate() + 1)
+  }
+  return out
 })
 
 // X-axis ticks: every ~2 hours, snapped to the nearest hour boundary
@@ -467,6 +509,17 @@ watch(
 .tl-cursor {
   pointer-events: none;
   transition: transform 0.4s ease;
+}
+
+.tl-day-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  fill: var(--ink-muted);
+  font-weight: 500;
+}
+
+.tl-day-boundary {
+  pointer-events: none;
 }
 
 /* Skeleton ------------------------------------------------------------ */
