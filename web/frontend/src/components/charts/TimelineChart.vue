@@ -57,10 +57,11 @@
         />
       </g>
 
-      <!-- Horizontal grid lines (2 lines like mock) -->
+      <!-- Horizontal grid lines (3 lines: 33%, 66%, top) -->
       <g v-if="!loading" class="tl-grid">
         <line :x1="0" :x2="VB_W" :y1="VB_H - PAD_BOTTOM - chartHeight * 0.33" :y2="VB_H - PAD_BOTTOM - chartHeight * 0.33" stroke="var(--line)" stroke-width="0.5" />
         <line :x1="0" :x2="VB_W" :y1="VB_H - PAD_BOTTOM - chartHeight * 0.66" :y2="VB_H - PAD_BOTTOM - chartHeight * 0.66" stroke="var(--line)" stroke-width="0.5" />
+        <line :x1="0" :x2="VB_W" :y1="PAD_TOP" :y2="PAD_TOP" stroke="var(--line)" stroke-width="0.5" />
       </g>
 
       <!-- Bars: one per bucket. idle > 50% of total → gray, else black -->

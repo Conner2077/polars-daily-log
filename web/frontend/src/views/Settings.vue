@@ -93,7 +93,7 @@
         <div class="alert-body">
           如果登录失败（只拿到 1 个 cookie），可能是本地代理（如 Clash）拦截了 localhost 请求。
           请改用
-          <a :href="'http://127.0.0.1:' + location.port + location.hash">http://127.0.0.1:{{ location.port }}</a>
+          <a :href="'http://127.0.0.1:' + windowPort + window.location.hash">http://127.0.0.1:{{ windowPort }}</a>
           访问，可绕过代理。
         </div>
       </div>
@@ -494,6 +494,7 @@ const tabs = [
 ]
 
 const isLocalhost = window.location.hostname === 'localhost'
+const windowPort = window.location.port || '8888'
 
 const checkingKey = ref(false)
 const keyCheckResult = ref(null)
