@@ -39,7 +39,7 @@
       v-else
       class="tl-svg"
       :viewBox="`0 0 ${VB_W} ${VB_H}`"
-      preserveAspectRatio="none"
+      preserveAspectRatio="xMidYMax meet"
       @mouseleave="hideTooltip"
     >
       <!-- Loading skeleton -->
@@ -47,16 +47,16 @@
         <rect
           v-for="i in skeletonCount"
           :key="`sk-${i}`"
-          :x="(i - 1) * bucketPxWidth + barPadding"
+          :x="(i - 1) * bucketPxWidth + BAR_GAP"
           :y="VB_H - PAD_BOTTOM - skeletonHeight(i)"
-          :width="Math.max(2, bucketPxWidth - barPadding * 2)"
+          :width="Math.max(2, bucketPxWidth - BAR_GAP * 2)"
           :height="skeletonHeight(i)"
           fill="var(--ink-dim)"
           fill-opacity="0.15"
         />
       </g>
 
-      <!-- Bars (live data) — dual bars: active (black) + idle (gray) side by side -->
+      <!-- Bars (live data) — one bar per bucket: black if active, gray if idle-only -->
       <g v-else class="tl-bars" :style="{ transform: `translateX(${shiftPx}px)` }">
         <g
           v-for="(b, idx) in buckets"
@@ -66,44 +66,46 @@
           :style="idx === 0 && shifting ? { opacity: 0 } : {}"
           @mouseenter="(e) => showTooltip(e, b, idx)"
         >
-          <!-- Active bar (left half of bucket slot) -->
+          <!-- Active bucket (has active_mins > 0) — solid black bar -->
           <g
             v-if="(b.active_mins || 0) > 0"
             class="tl-bar tl-bar-active"
-            :class="{ 'tl-bar-pulse': idx === buckets.length - 1 && (b.active_mins || 0) > 0 }"
+            :class="{ 'tl-bar-pulse': idx === buckets.length - 1 }"
             :style="{ transform: `scaleY(${activeScale(b)})` }"
           >
             <rect
-              :x="barPadding"
+              :x="BAR_GAP"
               :y="VB_H - PAD_BOTTOM - chartHeight"
-              :width="Math.max(2, activeBarWidth)"
+              :width="Math.max(2, bucketPxWidth - BAR_GAP * 2)"
               :height="chartHeight"
+              rx="1.5"
               fill="var(--ink)"
             />
           </g>
 
-          <!-- Idle bar (right half, gray) — shown whenever idle_mins > 0 -->
+          <!-- Idle-only bucket (no active, has idle) — gray bar -->
           <g
-            v-if="(b.idle_mins || 0) > 0"
+            v-else-if="(b.idle_mins || 0) > 0"
             class="tl-bar tl-bar-idle"
             :style="{ transform: `scaleY(${idleScale(b)})` }"
           >
             <rect
-              :x="(b.active_mins || 0) > 0 ? barPadding + activeBarWidth + 1 : barPadding"
+              :x="BAR_GAP"
               :y="VB_H - PAD_BOTTOM - chartHeight"
-              :width="Math.max(2, idleBarWidth)"
+              :width="Math.max(2, bucketPxWidth - BAR_GAP * 2)"
               :height="chartHeight"
+              rx="1.5"
               fill="var(--ink)"
-              fill-opacity="0.25"
+              fill-opacity="0.22"
             />
           </g>
 
-          <!-- Hit area for totally empty buckets -->
+          <!-- Empty bucket — invisible hit area -->
           <rect
-            v-if="(b.active_mins || 0) === 0 && (b.idle_mins || 0) === 0"
-            :x="barPadding"
+            v-else
+            :x="BAR_GAP"
             :y="VB_H - PAD_BOTTOM - 20"
-            :width="Math.max(2, bucketPxWidth - barPadding * 2)"
+            :width="Math.max(2, bucketPxWidth - BAR_GAP * 2)"
             :height="20"
             fill="transparent"
           />
@@ -124,18 +126,18 @@
         </text>
       </g>
 
-      <!-- Current-time cursor -->
-      <g v-if="!loading" class="tl-cursor" :transform="`translate(${cursorX}, 0)`">
+      <!-- Current-time cursor — thin dashed line from top to baseline -->
+      <g v-if="!loading && cursorX > 0 && cursorX < VB_W" class="tl-cursor" :transform="`translate(${cursorX}, 0)`">
         <line
           :x1="0"
           :x2="0"
-          :y1="8"
+          :y1="PAD_TOP"
           :y2="VB_H - PAD_BOTTOM"
-          stroke="var(--ink-muted)"
-          stroke-width="1"
-          stroke-dasharray="2 3"
+          stroke="var(--ink-dim)"
+          stroke-width="0.8"
+          stroke-dasharray="3 3"
         />
-        <circle :cx="0" :cy="8" r="3" fill="var(--ink-muted)" />
+        <circle :cx="0" :cy="PAD_TOP" r="2.5" fill="var(--ink-muted)" />
       </g>
 
       <!-- Empty-state label -->
@@ -176,9 +178,9 @@ const props = defineProps({
 const VB_W = 960
 const VB_H = 240
 const PAD_BOTTOM = 24 // reserved for axis labels
-const PAD_TOP = 12
+const PAD_TOP = 16
 const chartHeight = VB_H - PAD_BOTTOM - PAD_TOP // drawable vertical space
-const barPadding = 1 // horizontal gap between bars, in viewBox units
+const BAR_GAP = 1.5 // px gap each side of a bar (total gap = 3px between bars)
 
 // ─── State ──────────────────────────────────────────────────────────────────
 const containerEl = ref(null)
@@ -211,16 +213,6 @@ const maxActive = computed(() => {
   return m
 })
 
-const maxIdle = computed(() => {
-  let m = 0
-  for (const b of buckets.value) if ((b.idle_mins || 0) > m) m = b.idle_mins
-  return m
-})
-
-// Split each bucket slot into active (left ~60%) + idle (right ~40%)
-const fullBarWidth = computed(() => Math.max(2, bucketPxWidth.value - barPadding * 2))
-const activeBarWidth = computed(() => Math.floor(fullBarWidth.value * 0.58))
-const idleBarWidth = computed(() => fullBarWidth.value - activeBarWidth.value - 1)
 
 const isEmpty = computed(
   () => buckets.value.length > 0 && buckets.value.every((b) => (b.active_mins || 0) === 0),
@@ -248,10 +240,9 @@ function activeScale(b) {
 }
 
 function idleScale(b) {
-  // Scale idle relative to max active (so both share the same y-axis)
-  const ref = maxActive.value > 0 ? maxActive.value : props.bucketMinutes
-  const k = ((b.idle_mins || 0) / ref) * 0.9
-  return Math.max(0.03, k)
+  // Idle-only buckets: scale relative to bucket size (max = full height)
+  const k = Math.min(1, (b.idle_mins || 0) / props.bucketMinutes) * 0.5
+  return Math.max(0.05, k)
 }
 
 // Cursor position inside the window
