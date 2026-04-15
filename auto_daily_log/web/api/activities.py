@@ -1,9 +1,154 @@
 from fastapi import APIRouter, Request, Query
 from fastapi.responses import FileResponse
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from collections import Counter
 
 router = APIRouter(tags=["activities"])
+
+
+_BUCKET_MINUTES = {"5m": 5, "15m": 15, "1h": 60}
+
+
+@router.get("/activities/timeline")
+async def activities_timeline(
+    request: Request,
+    hours: int = Query(default=12, ge=1, le=72),
+    bucket: str = Query(default="15m", pattern="^(5m|15m|1h)$"),
+):
+    """Return a per-bucket active/idle minute breakdown for the last `hours`.
+
+    Used by the frontend "right-now" widget to render a flat-line when idle.
+    All buckets inside `[now - hours, now]` are always returned — empty ones
+    included — so the chart renders consistently.
+
+    Duration semantics: each row has `duration_sec` (30s default per sample).
+    We sum `duration_sec` per-bucket matching the pattern used in
+    ``dashboard.py`` and ``_compress_activities``. Rows whose timestamp falls
+    inside the bucket contribute their full duration to that bucket (we do
+    not split samples across bucket boundaries — samples are small enough
+    that this is noise, and the schema has no end-time column to split on).
+    """
+    db = request.app.state.db
+    bucket_min = _BUCKET_MINUTES[bucket]
+
+    # Local server time per spec — no timezone conversion.
+    now = datetime.now().replace(microsecond=0)
+    window_start = now - timedelta(hours=hours)
+
+    # Align first bucket to clock boundary <= window_start.
+    # For 15m buckets: :00 :15 :30 :45. For 1h: :00. For 5m: every 5.
+    def floor_to_bucket(dt: datetime, minutes: int) -> datetime:
+        total_min = dt.hour * 60 + dt.minute
+        floored_min = (total_min // minutes) * minutes
+        return dt.replace(hour=floored_min // 60, minute=floored_min % 60, second=0, microsecond=0)
+
+    first_bucket_start = floor_to_bucket(window_start, bucket_min)
+
+    # Emit exactly hours*60/bucket_min buckets so the frontend always gets a
+    # fixed shape. First bucket may be partial (its start < window_start).
+    total_buckets = (hours * 60) // bucket_min
+    bucket_starts: list[datetime] = [
+        first_bucket_start + timedelta(minutes=bucket_min * i)
+        for i in range(total_buckets)
+    ]
+
+    # Query rows within window.
+    rows = await db.fetch_all(
+        "SELECT timestamp, app_name, category, duration_sec FROM activities "
+        "WHERE timestamp >= ? AND timestamp <= ? AND deleted_at IS NULL",
+        (window_start.isoformat(timespec="seconds"), now.isoformat(timespec="seconds")),
+    )
+
+    # Group rows by bucket index.
+    per_bucket_active_sec: dict[int, float] = {}
+    per_bucket_idle_sec: dict[int, float] = {}
+    per_bucket_apps: dict[int, Counter] = {}
+
+    for row in rows:
+        ts_str = row["timestamp"]
+        try:
+            ts = datetime.fromisoformat(ts_str)
+        except (TypeError, ValueError):
+            continue
+        if ts < first_bucket_start or ts > now:
+            continue
+        offset_min = int((ts - first_bucket_start).total_seconds() // 60)
+        idx = offset_min // bucket_min
+        if idx < 0 or idx >= len(bucket_starts):
+            continue
+        dur = row["duration_sec"] or 0
+        category = row["category"]
+        app_name = row["app_name"]
+        if category == "idle":
+            per_bucket_idle_sec[idx] = per_bucket_idle_sec.get(idx, 0) + dur
+        else:
+            per_bucket_active_sec[idx] = per_bucket_active_sec.get(idx, 0) + dur
+            if app_name:
+                per_bucket_apps.setdefault(idx, Counter())[app_name] += 1
+
+    buckets_out = []
+    for idx, bs in enumerate(bucket_starts):
+        active_sec = per_bucket_active_sec.get(idx, 0)
+        idle_sec = per_bucket_idle_sec.get(idx, 0)
+        top_app = None
+        if idx in per_bucket_apps:
+            apps_counter = per_bucket_apps[idx]
+            # Sort by (-count, name) so ties break alphabetically (ascending).
+            top_app = sorted(apps_counter.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+        buckets_out.append({
+            "bucket_start": bs.isoformat(timespec="seconds"),
+            "active_mins": round(active_sec / 60.0, 2),
+            "idle_mins": round(idle_sec / 60.0, 2),
+            "top_app": top_app,
+        })
+
+    return {
+        "window_start": window_start.isoformat(timespec="seconds"),
+        "window_end": now.isoformat(timespec="seconds"),
+        "bucket_minutes": bucket_min,
+        "buckets": buckets_out,
+    }
+
+
+@router.get("/activities/recent")
+async def recent_activities(
+    request: Request,
+    limit: int = Query(default=5, ge=1, le=50),
+):
+    """Most-recent non-idle, non-soft-deleted activities.
+
+    Joins against `collectors` to resolve `machine_name` from the
+    activity's `machine_id`. Activities with no matching collector row
+    (e.g. legacy 'local' before registration) pass through the raw
+    `machine_id` string as the machine name.
+    """
+    db = request.app.state.db
+    rows = await db.fetch_all(
+        "SELECT a.timestamp, a.app_name, a.window_title, a.llm_summary, "
+        "       a.machine_id, c.name AS machine_name "
+        "FROM activities a "
+        "LEFT JOIN collectors c ON c.machine_id = a.machine_id "
+        "WHERE a.deleted_at IS NULL AND a.category != 'idle' "
+        "ORDER BY a.timestamp DESC LIMIT ?",
+        (limit,),
+    )
+    out = []
+    for r in rows:
+        ts_str = r.get("timestamp") or ""
+        hhmm = ""
+        try:
+            hhmm = datetime.fromisoformat(ts_str).strftime("%H:%M")
+        except (ValueError, TypeError):
+            hhmm = ""
+        out.append({
+            "timestamp": hhmm,
+            "app_name": r.get("app_name") or "",
+            "window_title": r.get("window_title") or "",
+            "llm_summary": r.get("llm_summary") or "",
+            "machine_name": r.get("machine_name") or r.get("machine_id") or "",
+        })
+    return out
 
 
 @router.get("/activities")

@@ -5,6 +5,7 @@ import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
 import './styles/global.css'
+import './styles/theme-minimal.css'  // ← comment this line to revert to current UI
 
 // ─── Toast (ElMessage) customization ─────────────────────────────────
 // Default duration 1.5s (was 3s) + click anywhere on the toast dismisses it.

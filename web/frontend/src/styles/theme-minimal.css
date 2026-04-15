@@ -1,0 +1,618 @@
+/* ============================================================
+   theme-minimal.css — OpenAI-style overlay on top of global.css
+   ------------------------------------------------------------
+   REVERSIBILITY CONTRACT
+   - Pure additive: do NOT edit global.css or any .vue <style>.
+   - Loaded AFTER global.css in main.js.
+   - Commenting out the import in main.js fully reverts the UI.
+
+   SECTION MAP
+   1. Font loading (Google Fonts: Geist / Noto Sans SC / JetBrains Mono)
+   2. Token overrides (landing palette cascades via existing :root vars)
+   3. Global Element Plus component overrides       ← Wave 2c
+   4. TimelineChart container styling (if any)       ← Wave 3
+   5. Activities page specifics                      ← Wave 4 Phase 3
+   6. MyLogs page specifics                          ← Wave 4 Phase 4
+   7. Issues page specifics                          ← Wave 4 Phase 5
+   8. Settings page specifics                        ← Wave 4 Phase 6
+   ============================================================ */
+
+/* ──────────────────────────────────────────────
+   1. FONTS — Google Fonts CDN (CJK fallback system)
+   ────────────────────────────────────────────── */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700;800&display=swap");
+
+/* ──────────────────────────────────────────────
+   2. TOKEN OVERRIDES — landing palette
+   ------------------------------------------------
+   Override the vars defined in global.css :root.
+   All cascading styles inherit automatically.
+   ────────────────────────────────────────────── */
+:root {
+  /* Surface */
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-hover: #fafafa;
+  --bg-soft: #fafafa;            /* new — used by new components */
+  --bg-code: #0d0d0d;            /* new — dark code blocks */
+
+  /* Ink hierarchy — warm off-black to match OpenAI zh-Hant */
+  --text-primary: #171717;
+  --text-secondary: #6e6e80;
+  --text-tertiary: #acacbe;
+  --ink: #171717;                /* alias for new components */
+  --ink-soft: #353740;
+  --ink-muted: #6e6e80;
+  --ink-dim: #acacbe;
+
+  /* No brand color — accent folds into ink (monochrome) */
+  --accent: #171717;
+  --accent-hover: #000000;
+  --accent-soft: #fafafa;        /* subtle backgrounds that used to be blue-tinted */
+
+  /* Status — kept but toned down */
+  --success: #10a37f;
+  --warning: #c67f2a;
+  --danger: #d1453b;
+
+  /* Lines */
+  --border: #e5e5e5;
+  --line: #e5e5e5;
+  --line-soft: #ececec;
+
+  /* Shadows — flatter, less heavy */
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 1px rgba(0, 0, 0, 0.03);
+  --shadow-lg: 0 8px 24px -12px rgba(0, 0, 0, 0.12), 0 2px 4px rgba(0, 0, 0, 0.03);
+
+  /* Radii — slightly tighter for crisper edges */
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-pill: 999px;
+
+  /* Font stack — Geist + CJK fallback + mono */
+  --font: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC",
+    sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco,
+    Consolas, monospace;
+
+  --transition: all 0.2s ease;
+}
+
+/* Body-level refinements that var changes alone don't cover */
+body {
+  font-family: var(--font);
+  color: var(--text-primary);
+  background: var(--bg);
+  font-feature-settings: "ss01", "cv11";
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-mono);
+}
+
+/* ──────────────────────────────────────────────
+   3. GLOBAL ELEMENT PLUS OVERRIDES        (Wave 2c)
+   ------------------------------------------------
+   FILL WITH: button / input / dialog / tag / switch /
+              table / timeline variants
+   ────────────────────────────────────────────── */
+/* 3.1 Button
+   ------------------------------------------------ */
+/* Default (no type) — neutral surface */
+.el-button {
+  background: var(--bg) !important;
+  border-color: var(--line) !important;
+  color: var(--ink) !important;
+  border-radius: var(--radius-sm) !important;
+  box-shadow: none !important;
+  font-family: var(--font) !important;
+  transition: var(--transition) !important;
+}
+
+.el-button:hover,
+.el-button:focus {
+  background: var(--bg-soft) !important;
+  border-color: var(--line) !important;
+  color: var(--ink) !important;
+}
+
+/* Round pill modifier keeps its pill radius */
+.el-button.is-round {
+  border-radius: var(--radius-pill) !important;
+}
+
+/* Circle keeps full circle */
+.el-button.is-circle {
+  border-radius: 50% !important;
+}
+
+/* Primary — black pill */
+.el-button--primary {
+  background: var(--ink) !important;
+  border-color: var(--ink) !important;
+  color: #ffffff !important;
+}
+
+.el-button--primary:hover,
+.el-button--primary:focus {
+  background: #000000 !important;
+  border-color: #000000 !important;
+  color: #ffffff !important;
+}
+
+/* Danger — neutralized red */
+.el-button--danger {
+  background: var(--danger) !important;
+  border-color: var(--danger) !important;
+  color: #ffffff !important;
+}
+
+.el-button--danger:hover,
+.el-button--danger:focus {
+  background: #b83a31 !important;
+  border-color: #b83a31 !important;
+  color: #ffffff !important;
+}
+
+/* Success / warning / info — keep neutral shell, tint text */
+.el-button--success {
+  background: var(--success) !important;
+  border-color: var(--success) !important;
+  color: #ffffff !important;
+}
+
+.el-button--success:hover,
+.el-button--success:focus {
+  background: #0d8a6b !important;
+  border-color: #0d8a6b !important;
+}
+
+.el-button--warning {
+  background: var(--warning) !important;
+  border-color: var(--warning) !important;
+  color: #ffffff !important;
+}
+
+.el-button--warning:hover,
+.el-button--warning:focus {
+  background: #a86a20 !important;
+  border-color: #a86a20 !important;
+}
+
+/* Text buttons — no background */
+.el-button.is-text,
+.el-button--text {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: var(--ink) !important;
+}
+
+.el-button.is-text:hover,
+.el-button--text:hover {
+  background: var(--bg-soft) !important;
+  color: var(--ink) !important;
+}
+
+/* Disabled state — flat neutral */
+.el-button.is-disabled,
+.el-button.is-disabled:hover {
+  background: var(--bg-soft) !important;
+  border-color: var(--line) !important;
+  color: var(--ink-dim) !important;
+  box-shadow: none !important;
+}
+
+/* 3.2 Input / Textarea
+   ------------------------------------------------ */
+.el-input__wrapper,
+.el-textarea__inner {
+  box-shadow: 0 0 0 1px var(--line) inset !important;
+  background: var(--bg) !important;
+  border-radius: var(--radius-sm) !important;
+  transition: box-shadow 0.15s ease !important;
+}
+
+.el-input__wrapper:hover,
+.el-textarea__inner:hover {
+  box-shadow: 0 0 0 1px var(--ink-muted) inset !important;
+}
+
+.el-input__wrapper.is-focus,
+.el-input__wrapper:focus-within,
+.el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--ink) inset !important;
+  outline: none !important;
+}
+
+.el-input__inner,
+.el-textarea__inner {
+  color: var(--ink) !important;
+  font-family: inherit !important;
+  background: transparent !important;
+}
+
+.el-input__inner::placeholder,
+.el-textarea__inner::placeholder {
+  color: var(--ink-dim) !important;
+}
+
+.el-input.is-disabled .el-input__wrapper,
+.el-textarea.is-disabled .el-textarea__inner {
+  background: var(--bg-soft) !important;
+  box-shadow: 0 0 0 1px var(--line) inset !important;
+  color: var(--ink-dim) !important;
+}
+
+.el-input.is-disabled .el-input__inner {
+  color: var(--ink-dim) !important;
+  -webkit-text-fill-color: var(--ink-dim) !important;
+}
+
+/* 3.3 Dialog
+   ------------------------------------------------ */
+.el-dialog {
+  border-radius: var(--radius) !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: var(--shadow-lg) !important;
+  overflow: hidden !important;
+}
+
+.el-dialog__header {
+  border-bottom: 1px solid var(--line) !important;
+  padding: 20px 24px !important;
+  margin-right: 0 !important;
+}
+
+.el-dialog__title {
+  color: var(--ink) !important;
+  font-weight: 700 !important;
+  font-family: var(--font) !important;
+}
+
+.el-dialog__body {
+  padding: 20px 24px !important;
+  color: var(--ink) !important;
+}
+
+.el-dialog__footer {
+  border-top: 1px solid var(--line) !important;
+  padding: 16px 24px !important;
+}
+
+.el-dialog__headerbtn {
+  top: 16px !important;
+}
+
+.el-dialog__headerbtn .el-dialog__close {
+  color: var(--ink-muted) !important;
+  transition: color 0.15s ease !important;
+}
+
+.el-dialog__headerbtn:hover .el-dialog__close,
+.el-dialog__headerbtn:focus .el-dialog__close {
+  color: var(--ink) !important;
+}
+
+/* 3.4 Tag
+   ------------------------------------------------ */
+.el-tag {
+  background: var(--bg-soft) !important;
+  color: var(--ink-muted) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 6px !important;
+  font-family: var(--font) !important;
+}
+
+.el-tag.is-round,
+.el-tag--round {
+  border-radius: var(--radius-pill) !important;
+}
+
+.el-tag--success {
+  background: rgba(16, 163, 127, 0.08) !important;
+  color: var(--success) !important;
+  border-color: rgba(16, 163, 127, 0.25) !important;
+}
+
+.el-tag--warning {
+  background: rgba(198, 127, 42, 0.08) !important;
+  color: var(--warning) !important;
+  border-color: rgba(198, 127, 42, 0.25) !important;
+}
+
+.el-tag--danger {
+  background: rgba(209, 69, 59, 0.08) !important;
+  color: var(--danger) !important;
+  border-color: rgba(209, 69, 59, 0.25) !important;
+}
+
+.el-tag--info {
+  background: var(--bg-soft) !important;
+  color: var(--ink-muted) !important;
+  border-color: var(--line) !important;
+}
+
+.el-tag .el-tag__close {
+  color: var(--ink-muted) !important;
+}
+
+.el-tag .el-tag__close:hover {
+  background: var(--ink) !important;
+  color: #ffffff !important;
+}
+
+/* 3.5 Switch
+   ------------------------------------------------ */
+.el-switch__core {
+  border-color: var(--line) !important;
+  background: var(--line) !important;
+  transition: background 0.2s ease, border-color 0.2s ease !important;
+}
+
+.el-switch.is-checked .el-switch__core {
+  border-color: var(--ink) !important;
+  background: var(--ink) !important;
+}
+
+.el-switch__core .el-switch__action {
+  background: #ffffff !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08) !important;
+}
+
+/* 3.6 Table
+   ------------------------------------------------ */
+.el-table {
+  color: var(--ink) !important;
+  font-family: var(--font) !important;
+  background: var(--bg) !important;
+  --el-table-border-color: var(--line-soft) !important;
+  --el-table-header-bg-color: var(--bg-soft) !important;
+  --el-table-row-hover-bg-color: var(--bg-soft) !important;
+  --el-table-header-text-color: var(--ink-muted) !important;
+  --el-table-text-color: var(--ink) !important;
+}
+
+.el-table th.el-table__cell {
+  background: var(--bg-soft) !important;
+  color: var(--ink-muted) !important;
+  font-weight: 500 !important;
+  border-bottom: 1px solid var(--line) !important;
+}
+
+.el-table td.el-table__cell,
+.el-table tr {
+  background: var(--bg) !important;
+  border-bottom: 1px solid var(--line-soft) !important;
+}
+
+.el-table--enable-row-hover .el-table__body tr:hover > td.el-table__cell {
+  background: var(--bg-soft) !important;
+}
+
+.el-table .sort-caret.ascending {
+  border-bottom-color: var(--ink-muted) !important;
+}
+
+.el-table .sort-caret.descending {
+  border-top-color: var(--ink-muted) !important;
+}
+
+.el-table .ascending .sort-caret.ascending {
+  border-bottom-color: var(--ink) !important;
+}
+
+.el-table .descending .sort-caret.descending {
+  border-top-color: var(--ink) !important;
+}
+
+/* 3.7 Timeline
+   ------------------------------------------------ */
+.el-timeline-item__node {
+  background: var(--ink) !important;
+  border-color: var(--ink) !important;
+}
+
+.el-timeline-item__node--primary {
+  background: var(--ink) !important;
+  border-color: var(--ink) !important;
+}
+
+.el-timeline-item__node--success {
+  background: var(--success) !important;
+  border-color: var(--success) !important;
+}
+
+.el-timeline-item__node--warning {
+  background: var(--warning) !important;
+  border-color: var(--warning) !important;
+}
+
+.el-timeline-item__node--danger {
+  background: var(--danger) !important;
+  border-color: var(--danger) !important;
+}
+
+.el-timeline-item__tail {
+  border-left-color: var(--line) !important;
+}
+
+.el-timeline-item__timestamp {
+  color: var(--ink-muted) !important;
+  font-family: var(--font) !important;
+}
+
+.el-timeline-item__content {
+  color: var(--ink) !important;
+}
+
+/* 3.8 Popconfirm / Popover
+   ------------------------------------------------ */
+.el-popper,
+.el-popover.el-popper,
+.el-popconfirm {
+  background: var(--bg) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: var(--radius-sm) !important;
+  box-shadow: var(--shadow-lg) !important;
+  color: var(--ink) !important;
+}
+
+.el-popper__arrow::before {
+  background: var(--bg) !important;
+  border-color: var(--line) !important;
+}
+
+.el-popconfirm__main,
+.el-popconfirm__main .el-popconfirm__icon {
+  color: var(--ink) !important;
+}
+
+.el-popconfirm__action .el-button--primary {
+  background: var(--ink) !important;
+  border-color: var(--ink) !important;
+  color: #ffffff !important;
+}
+
+.el-popconfirm__action .el-button--primary:hover {
+  background: #000000 !important;
+  border-color: #000000 !important;
+}
+
+/* 3.9 Tabs
+   ------------------------------------------------ */
+.el-tabs__active-bar {
+  background-color: var(--ink) !important;
+}
+
+.el-tabs__item {
+  color: var(--ink-muted) !important;
+  font-family: var(--font) !important;
+  font-weight: 400 !important;
+}
+
+.el-tabs__item:hover {
+  color: var(--ink) !important;
+}
+
+.el-tabs__item.is-active {
+  color: var(--ink) !important;
+  font-weight: 500 !important;
+}
+
+.el-tabs__nav-wrap::after {
+  background-color: var(--line) !important;
+  height: 1px !important;
+}
+
+/* 3.10 Card
+   ------------------------------------------------ */
+.el-card {
+  border-radius: var(--radius) !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: none !important;
+  background: var(--bg) !important;
+  color: var(--ink) !important;
+}
+
+.el-card__header {
+  border-bottom: 1px solid var(--line) !important;
+  color: var(--ink) !important;
+}
+
+/* 3.11 Empty
+   ------------------------------------------------ */
+.el-empty__description,
+.el-empty__description p {
+  color: var(--ink-muted) !important;
+  font-family: var(--font) !important;
+}
+
+.el-empty__image svg,
+.el-empty__image path {
+  color: var(--ink-dim) !important;
+  fill: var(--ink-dim) !important;
+}
+
+/* 3.12 Message (toast)
+   ------------------------------------------------ */
+.el-message {
+  background: var(--ink) !important;
+  border: none !important;
+  border-radius: var(--radius-sm) !important;
+  color: #ffffff !important;
+  box-shadow: var(--shadow-lg) !important;
+  font-family: var(--font) !important;
+  min-width: 0 !important;
+  padding: 12px 16px !important;
+}
+
+.el-message--success,
+.el-message--warning,
+.el-message--error,
+.el-message--info {
+  background: var(--ink) !important;
+  border: none !important;
+  color: #ffffff !important;
+}
+
+.el-message .el-message__content {
+  color: #ffffff !important;
+}
+
+.el-message .el-message__icon {
+  color: #ffffff !important;
+}
+
+.el-message--success .el-message__icon {
+  color: var(--success) !important;
+}
+
+.el-message--warning .el-message__icon {
+  color: var(--warning) !important;
+}
+
+.el-message--error .el-message__icon {
+  color: var(--danger) !important;
+}
+
+.el-message--info .el-message__icon {
+  color: var(--ink-dim) !important;
+}
+
+.el-message .el-message__closeBtn {
+  color: rgba(255, 255, 255, 0.6) !important;
+}
+
+.el-message .el-message__closeBtn:hover {
+  color: #ffffff !important;
+}
+
+
+/* ──────────────────────────────────────────────
+   4. TIMELINECHART CONTAINER              (Wave 3)
+   ────────────────────────────────────────────── */
+/* TODO: filled after TimelineChart component ships */
+
+/* ──────────────────────────────────────────────
+   5. ACTIVITIES PAGE SPECIFICS            (Phase 3)
+   ────────────────────────────────────────────── */
+/* TODO: Wave 4 Phase 3 subagent fills this section */
+
+/* ──────────────────────────────────────────────
+   6. MYLOGS PAGE SPECIFICS                (Phase 4)
+   ────────────────────────────────────────────── */
+/* TODO: Wave 4 Phase 4 subagent fills this section */
+
+/* ──────────────────────────────────────────────
+   7. ISSUES PAGE SPECIFICS                (Phase 5)
+   ────────────────────────────────────────────── */
+/* TODO: Wave 4 Phase 5 subagent fills this section */
+
+/* ──────────────────────────────────────────────
+   8. SETTINGS PAGE SPECIFICS              (Phase 6)
+   ────────────────────────────────────────────── */
+/* TODO: Wave 4 Phase 6 subagent fills this section */

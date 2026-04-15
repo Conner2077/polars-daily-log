@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from ..models.database import Database
-from .api import settings, issues, activities, worklogs, dashboard, git_repos, search, ingest, feedback, chat
+from .api import settings, issues, activities, worklogs, dashboard, git_repos, search, ingest, feedback, chat, machines
 
 def create_app(db: Database) -> FastAPI:
     app = FastAPI(title="Polars Daily Log", version="0.1.0")
@@ -15,6 +15,7 @@ def create_app(db: Database) -> FastAPI:
     app.include_router(ingest.router, prefix="/api")
     app.include_router(feedback.router, prefix="/api")
     app.include_router(chat.router, prefix="/api")
+    app.include_router(machines.router, prefix="/api")
     from fastapi.staticfiles import StaticFiles
     from pathlib import Path
     # Prefer packaged dist (release wheel); fall back to dev source tree.

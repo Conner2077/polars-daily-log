@@ -23,6 +23,77 @@ class IssueUpdate(BaseModel):
     time_spent_hours: Optional[float] = None
     summary: Optional[str] = None
 
+@router.get("/worklogs/drafts/preview")
+async def drafts_preview(
+    request: Request,
+    limit: int = Query(default=3, ge=1, le=20),
+    status: str = Query(default="pending_review"),
+):
+    """Flattened preview of worklog drafts for the dashboard widget.
+
+    Each daily draft may contain a JSON array of per-issue entries in
+    `summary`. We flatten those into one row per issue, sorted by most
+    recent draft first. If `summary` is not a JSON array (legacy format),
+    we fall back to a single synthesized entry using `issue_key` and
+    `time_spent_sec` on the draft row itself.
+    """
+    db = request.app.state.db
+    drafts = await db.fetch_all(
+        "SELECT id, date, issue_key, time_spent_sec, summary, status, created_at, updated_at "
+        "FROM worklog_drafts WHERE status = ? "
+        "ORDER BY date DESC, COALESCE(updated_at, created_at) DESC",
+        (status,),
+    )
+
+    out: list[dict] = []
+    for d in drafts:
+        if len(out) >= limit:
+            break
+        summary_raw = d.get("summary") or ""
+        entries = None
+        try:
+            parsed = json.loads(summary_raw)
+            if isinstance(parsed, list):
+                entries = parsed
+        except (json.JSONDecodeError, TypeError):
+            entries = None
+
+        if entries is not None:
+            for iss in entries:
+                if len(out) >= limit:
+                    break
+                issue_key = iss.get("issue_key") or d.get("issue_key") or ""
+                hours = iss.get("time_spent_hours")
+                try:
+                    hours_f = round(float(hours), 2) if hours is not None else 0.0
+                except (TypeError, ValueError):
+                    hours_f = 0.0
+                title = (iss.get("summary") or "").strip()
+                # Short single-line title: first line only
+                if title:
+                    title = title.splitlines()[0].strip()
+                out.append({
+                    "issue_key": issue_key,
+                    "title": title,
+                    "hours": hours_f,
+                    "time_range": None,
+                    "date": d.get("date"),
+                })
+        else:
+            # Legacy row: whole draft is one entry
+            hours_f = round((d.get("time_spent_sec") or 0) / 3600, 2)
+            title = (summary_raw or "").strip().splitlines()[0].strip() if summary_raw else ""
+            out.append({
+                "issue_key": d.get("issue_key") or "",
+                "title": title,
+                "hours": hours_f,
+                "time_range": None,
+                "date": d.get("date"),
+            })
+
+    return out
+
+
 @router.get("/worklogs")
 async def list_drafts(request: Request, date: str = Query(default=None), tag: str = Query(default=None)):
     db = request.app.state.db
