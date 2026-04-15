@@ -1,0 +1,399 @@
+---
+import Base from "../../layouts/Base.astro";
+
+const base = import.meta.env.BASE_URL;
+const repoUrl = "https://github.com/Conner2077/polars-daily-log";
+const releasesUrl = `${repoUrl}/releases`;
+const bootstrapUrl = `https://raw.githubusercontent.com/Conner2077/polars-daily-log/master/bootstrap.sh`;
+
+const toc = [
+  { id: "overview",      label: "1. What it is" },
+  { id: "install",       label: "2. Install" },
+  { id: "first-run",     label: "3. First-time setup" },
+  { id: "daily",         label: "4. Daily use" },
+  { id: "data",          label: "5. Where data lives" },
+  { id: "upgrade",       label: "6. Upgrade & uninstall" },
+  { id: "troubleshoot",  label: "7. Troubleshooting" },
+  { id: "developer",     label: "8. Developers" },
+];
+---
+
+<Base title="Help — Polars Daily Log" description="Installation, setup, daily use, and troubleshooting for Polars Daily Log.">
+  <!-- NAV ──────────────────────────────────────────────────── -->
+  <header class="nav">
+    <div class="nav-inner">
+      <a class="brand" href={base}>
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.4" opacity="0.3"/>
+            <circle cx="12" cy="12" r="5" fill="currentColor"/>
+          </svg>
+        </span>
+        <span>Polars Daily Log</span>
+      </a>
+      <nav class="nav-center">
+        <a href={base}>Home</a>
+        <a href={`${base}/help/en`} class="active">Help</a>
+        <a href={repoUrl} target="_blank" rel="noopener">GitHub</a>
+        <a href={`${repoUrl}/blob/master/CHANGELOG.md`} target="_blank" rel="noopener">Changelog</a>
+      </nav>
+      <a class="nav-cta" href={`${base}/help`}>中文</a>
+    </div>
+  </header>
+
+  <main class="doc">
+    <!-- SIDEBAR TOC ─────────────────────────────────────────── -->
+    <aside class="toc">
+      <div class="toc-inner">
+        <p class="toc-title">On this page</p>
+        <ul>
+          {toc.map((t) => (
+            <li><a href={`#${t.id}`}>{t.label}</a></li>
+          ))}
+        </ul>
+        <p class="toc-foot">
+          <a href={`${base}/help`}>中文版 →</a>
+        </p>
+      </div>
+    </aside>
+
+    <!-- CONTENT ─────────────────────────────────────────────── -->
+    <article class="content">
+      <header class="doc-head">
+        <p class="eyebrow">User Guide</p>
+        <h1>Help</h1>
+        <p class="lede">
+          Install, set up, run day-to-day, and troubleshoot — all in one page.
+          This is a personal tool: one install per person, and your data stays on your own machines.
+        </p>
+      </header>
+
+      <!-- 1. ──────────────────────────────────────────────── -->
+      <section id="overview">
+        <h2>1. What it is</h2>
+        <p>
+          Polars Daily Log is a locally-hosted work-activity aggregator. It silently tracks foreground activity
+          on every machine you use (app, window title, URL, optional OCR) plus your Git commits, asks an LLM to
+          summarize your day, and can push the result to Jira as a worklog with one click.
+        </p>
+        <p class="callout">
+          <strong>One install per person.</strong>
+          It isn't SaaS and isn't multi-tenant. Each user runs their own server + collectors,
+          and your data never leaves your network.
+        </p>
+        <h3>Which scenario is you?</h3>
+        <ul>
+          <li><strong>One computer only</strong>: install <code>both</code> (server + collector in one) on it.</li>
+          <li><strong>Multiple machines to aggregate</strong>: install <code>both</code> on the always-on machine as your hub; install <code>collector</code> on the others and point them at the hub.</li>
+          <li><strong>Want to hack on the code</strong>: clone the repo and use dev mode — see <a href="#developer">§8</a>.</li>
+        </ul>
+      </section>
+
+      <!-- 2. INSTALL ─────────────────────────────────────────── -->
+      <section id="install">
+        <h2>2. Install</h2>
+
+        <h3>Prerequisites</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th></th><th>macOS</th><th>Linux</th><th>Windows</th></tr></thead>
+            <tbody>
+              <tr><td>Python 3.9+</td><td>built-in</td><td>built-in</td><td><code>winget install Python.Python.3.12</code></td></tr>
+              <tr><td>Git</td><td><code>xcode-select --install</code></td><td><code>apt install git</code></td><td><code>winget install Git.Git</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Option A: one-liner (recommended, macOS / Linux)</h3>
+        <pre><code>curl -fsSL {bootstrapUrl} | bash</code></pre>
+        <p>
+          What it does: fetches the latest release → extracts to <code>~/.polars-daily-log</code> → runs <code>install.sh</code> interactively.
+        </p>
+
+        <h4>Non-interactive (installing a collector on a second machine)</h4>
+        <pre><code>{`curl -fsSL ${bootstrapUrl} | \\
+  PDL_ROLE=collector \\
+  PDL_SERVER_URL=http://your-hub:8888 \\
+  PDL_COLLECTOR_NAME=my-laptop \\
+  bash`}</code></pre>
+
+        <h4>Optional env vars</h4>
+        <ul class="kv">
+          <li><code>PDL_VERSION</code> — pin a version, default <code>latest</code></li>
+          <li><code>PDL_INSTALL_DIR</code> — install dir, default <code>~/.polars-daily-log</code></li>
+          <li><code>PDL_ROLE</code> — <code>server</code> / <code>collector</code> / <code>both</code> / <code>ask</code></li>
+          <li><code>PDL_SERVER_URL</code> — the server URL the collector should talk to</li>
+          <li><code>PDL_COLLECTOR_NAME</code> — display name for this collector on the hub</li>
+        </ul>
+
+        <h3>Option B: manual tarball (Windows, or offline)</h3>
+        <ol>
+          <li>Download <code>polars-daily-log-&lt;version&gt;.tar.gz</code> from the <a href={releasesUrl} target="_blank" rel="noopener">Releases page</a></li>
+          <li>Extract: <code>tar xzf polars-daily-log-0.2.0.tar.gz &amp;&amp; cd polars-daily-log-0.2.0</code></li>
+          <li>Run the installer:
+            <pre><code>{`# macOS / Linux
+bash install.sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy Bypass -File install.ps1`}</code></pre>
+          </li>
+        </ol>
+      </section>
+
+      <!-- 3. FIRST RUN ─────────────────────────────────────── -->
+      <section id="first-run">
+        <h2>3. First-time setup</h2>
+
+        <h3>Pick a role</h3>
+        <p>The installer asks:</p>
+        <pre><code>{`0. What are you installing?
+  1) server      — central API + Web UI
+  2) collector   — activity collector
+  3) both        — install both on this machine`}</code></pre>
+        <p>Mapping:</p>
+        <ul>
+          <li><strong>One machine only</strong>: pick <code>3</code> (both)</li>
+          <li><strong>This machine is your hub</strong>: pick <code>3</code> (both)</li>
+          <li><strong>This machine just pushes to the hub</strong>: pick <code>2</code>, then fill in <em>Server URL</em> and <em>Collector name</em></li>
+        </ul>
+
+        <h3>Start it</h3>
+        <pre><code>{`# If installed via bootstrap (~/.polars-daily-log)
+~/.polars-daily-log/pdl server start      # server role
+~/.polars-daily-log/pdl collector start   # collector role
+~/.polars-daily-log/pdl start             # both (start server + collector)`}</code></pre>
+        <p>Adding <code>pdl</code> to PATH makes this nicer:</p>
+        <pre><code>{`echo 'export PATH="$HOME/.polars-daily-log:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+pdl status`}</code></pre>
+
+        <h3>Open the Web UI</h3>
+        <p>Browse to <code>http://127.0.0.1:8888</code> (or the hub's IP). First thing, open <strong>Settings</strong>:</p>
+        <ul>
+          <li><strong>LLM</strong> — choose Kimi / OpenAI / Claude / Ollama and paste your API key (leave blank for the built-in Kimi default)</li>
+          <li><strong>Jira (optional)</strong> — if you want daily logs to sync as Jira worklogs, scan the QR to sign into Jira SSO</li>
+        </ul>
+      </section>
+
+      <!-- 4. DAILY ─────────────────────────────────────────── -->
+      <section id="daily">
+        <h2>4. Daily use</h2>
+
+        <h3>Start / stop</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>What</th><th>Command</th></tr></thead>
+            <tbody>
+              <tr><td>Start everything</td><td><code>pdl start</code></td></tr>
+              <tr><td>Start server only</td><td><code>pdl server start</code></td></tr>
+              <tr><td>Start collector only</td><td><code>pdl collector start</code></td></tr>
+              <tr><td>Status</td><td><code>pdl status</code></td></tr>
+              <tr><td>Stop</td><td><code>pdl stop</code></td></tr>
+              <tr><td>Restart</td><td><code>pdl restart</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>View logs</h3>
+        <pre><code>{`pdl server logs 100       # last 100 lines of server backend
+pdl server logs -f        # follow live
+pdl collector logs 50     # last 50 lines of collector`}</code></pre>
+
+        <h3>Windows equivalents</h3>
+        <p>Windows uses Scheduled Tasks for autostart (the installer asks whether to enable login autostart):</p>
+        <pre><code>{`Start-ScheduledTask -TaskName AutoDailyLogServer
+Stop-ScheduledTask -TaskName AutoDailyLogServer
+Get-ScheduledTaskInfo -TaskName AutoDailyLogCollector`}</code></pre>
+
+        <h3>Report a bug</h3>
+        <p>Click the <strong>💡</strong> button in the top-right of the Web UI. Write a few words; it attaches the current page + UA automatically.</p>
+      </section>
+
+      <!-- 5. DATA ──────────────────────────────────────────── -->
+      <section id="data">
+        <h2>5. Where data lives &amp; privacy</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Thing</th><th>Path</th></tr></thead>
+            <tbody>
+              <tr><td>Database (activities, logs, config)</td><td><code>~/.auto_daily_log/data.db</code></td></tr>
+              <tr><td>Screenshots</td><td><code>~/.auto_daily_log/screenshots/YYYY-MM-DD/</code></td></tr>
+              <tr><td>Server log</td><td><code>~/.auto_daily_log/logs/server.log</code></td></tr>
+              <tr><td>Standalone collector log</td><td><code>~/.auto_daily_log_collector/logs/collector.log</code></td></tr>
+              <tr><td>Server config</td><td><code>&lt;install-dir&gt;/config.yaml</code></td></tr>
+              <tr><td>Collector config</td><td><code>&lt;install-dir&gt;/collector.yaml</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="callout">
+          When you overwrite the tarball to upgrade, nothing under <code>~/</code> is touched — upgrades don't lose data.
+        </p>
+
+        <h3>Privacy notes</h3>
+        <ul>
+          <li><code>monitor.privacy.blocked_apps</code> / <code>blocked_urls</code> are respected strictly — matching activities are never recorded.</li>
+          <li>Anti-introspection apps (e.g. WeCom) listed in <code>hostile_apps_applescript</code> skip deep AppleScript introspection.</li>
+          <li>If OCR catches something sensitive (passwords, card numbers), deleting it in the UI hard-deletes from the recycle bin too.</li>
+        </ul>
+      </section>
+
+      <!-- 6. UPGRADE ───────────────────────────────────────── -->
+      <section id="upgrade">
+        <h2>6. Upgrade &amp; uninstall</h2>
+
+        <h3>Upgrade (bootstrap install)</h3>
+        <p>Rerun the same curl command. It upgrades in place — bootstrap runs <code>pdl stop</code> first, and data under <code>~/</code> is untouched.</p>
+
+        <h3>Upgrade (manual install)</h3>
+        <pre><code>{`cd <your extracted dir>
+./pdl stop
+tar xzf polars-daily-log-0.2.0.tar.gz --strip-components=1
+./pdl build --restart`}</code></pre>
+        <p>If a version requires config migration, it'll be called out at the top of <code>CHANGELOG.md</code>.</p>
+
+        <h3>Uninstall</h3>
+        <pre><code>{`./pdl stop
+rm -rf ~/.polars-daily-log            # code + venv + config
+rm -rf ~/.auto_daily_log              # data + logs (skip to keep them)
+rm -rf ~/.auto_daily_log_collector    # standalone collector creds + offline queue`}</code></pre>
+        <p>Windows extras:</p>
+        <pre><code>{`Unregister-ScheduledTask -TaskName AutoDailyLogServer -Confirm:$false
+Unregister-ScheduledTask -TaskName AutoDailyLogCollector -Confirm:$false`}</code></pre>
+      </section>
+
+      <!-- 7. TROUBLE ───────────────────────────────────────── -->
+      <section id="troubleshoot">
+        <h2>7. Troubleshooting</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Symptom</th><th>Check / fix</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>No module named aiosqlite</code> on startup</td>
+                <td>venv not activated / <code>install.sh</code> was skipped. Rerun <code>bash install.sh</code>.</td>
+              </tr>
+              <tr>
+                <td>Daily summary contains only <code>Activity summary: ...</code> lines</td>
+                <td>LLM call failed → in Web UI Settings verify engine / URL / API key.</td>
+              </tr>
+              <tr>
+                <td>Jira submission returns 500 "Internal Server Error"</td>
+                <td>Comment contained an emoji. Latest version scrubs automatically — upgrade.</td>
+              </tr>
+              <tr>
+                <td>WeCom auto-exits after 2–4 minutes</td>
+                <td>Make sure <code>monitor.hostile_apps_applescript</code> in <code>config.yaml</code> includes <code>wechat/wecom/企业微信</code>.</td>
+              </tr>
+              <tr>
+                <td>Frontend blank page</td>
+                <td><code>pdl server logs 50</code> to see the backend; hard-reload browser (Cmd/Ctrl+Shift+R).</td>
+              </tr>
+              <tr>
+                <td>Windows collector idle</td>
+                <td>Check <code>%USERPROFILE%\.auto_daily_log_collector\logs\collector.log</code> and the Scheduled Task status.</td>
+              </tr>
+              <tr>
+                <td>macOS collector can't read window titles</td>
+                <td>System Settings → Privacy &amp; Security → Accessibility: grant permission to Terminal / iTerm2.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 8. DEVELOPER ─────────────────────────────────────── -->
+      <section id="developer">
+        <h2>8. Developers</h2>
+        <p>If you cloned the repo instead of unpacking a tarball:</p>
+        <pre><code>{`git clone ${repoUrl}.git
+cd polars-daily-log
+bash install.sh           # auto-detects no wheel → dev mode
+./pdl server start`}</code></pre>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>What</th><th>Command</th></tr></thead>
+            <tbody>
+              <tr><td>Rebuild after pull</td><td><code>./pdl build --restart</code></td></tr>
+              <tr><td>Frontend only</td><td><code>./pdl build --no-python</code></td></tr>
+              <tr><td>Run tests</td><td><code>.venv/bin/python -m pytest tests/ -q</code></td></tr>
+              <tr><td>Frontend hot-reload</td><td><code>cd web/frontend &amp;&amp; npm run dev</code>, open <code>localhost:5173</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          Cutting a release: see <a href={`${repoUrl}/blob/master/docs/release.md`} target="_blank" rel="noopener">docs/release.md</a>.
+          Project principles: see <a href={`${repoUrl}/blob/master/AGENTS.md`} target="_blank" rel="noopener">AGENTS.md</a>.
+        </p>
+      </section>
+
+      <footer class="doc-foot">
+        <p>More questions? Open one at <a href={`${repoUrl}/issues/new`} target="_blank" rel="noopener">GitHub Issues</a>.</p>
+      </footer>
+    </article>
+  </main>
+</Base>
+
+<style>
+  /* ─── NAV (same as zh) ────────────────────────────────── */
+  .nav { position: sticky; top: 0; z-index: 20; background: rgba(255,255,255,0.85); backdrop-filter: saturate(1.5) blur(16px); -webkit-backdrop-filter: saturate(1.5) blur(16px); border-bottom: 1px solid var(--line); }
+  .nav-inner { max-width: 1280px; margin: 0 auto; padding: 16px 32px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+  .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; color: var(--ink); }
+  .nav-center { display: flex; align-items: center; gap: 32px; font-size: 15px; }
+  .nav-center a { color: var(--ink-muted); font-weight: 400; }
+  .nav-center a.active { color: var(--ink); font-weight: 500; }
+  .nav-center a:hover { color: var(--ink); opacity: 1; }
+  .nav-cta { display: inline-flex; padding: 7px 18px; background: var(--ink); color: var(--bg) !important; border-radius: 999px; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; }
+  .nav-cta:hover { opacity: 0.85; }
+
+  /* ─── DOC layout ──────────────────────────────────────── */
+  .doc { max-width: 1280px; margin: 0 auto; padding: 60px 32px 120px; display: grid; grid-template-columns: 240px 1fr; gap: 72px; align-items: start; }
+  .toc { position: sticky; top: 80px; }
+  .toc-inner { border-left: 1px solid var(--line); padding-left: 24px; }
+  .toc-title { margin: 0 0 16px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-muted); font-weight: 600; }
+  .toc ul { list-style: none; padding: 0; margin: 0 0 32px; display: flex; flex-direction: column; gap: 10px; }
+  .toc li a { font-size: 14px; color: var(--ink-muted); display: block; line-height: 1.5; }
+  .toc li a:hover { color: var(--ink); opacity: 1; }
+  .toc-foot { margin: 0; font-size: 13px; color: var(--ink-dim); }
+  .toc-foot a { color: var(--ink-muted); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--line); }
+
+  .content { max-width: 760px; color: var(--ink-soft); line-height: 1.72; }
+  .doc-head { margin-bottom: 72px; padding-bottom: 40px; border-bottom: 1px solid var(--line); }
+  .eyebrow { margin: 0 0 14px; font-size: 13px; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500; }
+  .content h1 { font-size: clamp(40px, 5vw, 60px); line-height: 1.05; font-weight: 800; letter-spacing: -0.035em; margin: 0 0 24px; color: var(--ink); }
+  .lede { font-size: 18px; color: var(--ink-muted); line-height: 1.7; max-width: 620px; margin: 0; }
+
+  section { margin-top: 72px; scroll-margin-top: 96px; }
+  section:first-of-type { margin-top: 0; }
+  .content h2 { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 24px; color: var(--ink); }
+  .content h3 { font-size: 19px; font-weight: 700; margin: 36px 0 14px; letter-spacing: -0.012em; color: var(--ink); }
+  .content h4 { font-size: 16px; font-weight: 600; margin: 24px 0 10px; color: var(--ink); }
+  .content p { margin: 14px 0; font-size: 16px; }
+  .content ul, .content ol { margin: 14px 0; padding-left: 22px; }
+  .content li { margin: 6px 0; }
+  .content ul.kv li { margin: 8px 0; }
+  .content pre { margin: 16px 0; font-size: 13px; }
+  .content pre code { font-size: inherit; }
+
+  .callout { background: var(--bg-soft); border-left: 3px solid var(--ink); padding: 16px 20px; margin: 20px 0; border-radius: 0 6px 6px 0; color: var(--ink-soft); font-size: 15.5px; }
+  .callout strong { color: var(--ink); }
+
+  .table-wrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--line); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  thead th { text-align: left; padding: 12px 16px; font-weight: 600; color: var(--ink); background: var(--bg-soft); border-bottom: 1px solid var(--line); }
+  tbody td { padding: 12px 16px; border-bottom: 1px solid var(--line-soft); color: var(--ink-soft); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+
+  .doc-foot { margin-top: 96px; padding-top: 32px; border-top: 1px solid var(--line); font-size: 14px; color: var(--ink-muted); }
+  .doc-foot a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+  .doc-foot a:hover { opacity: 0.6; }
+
+  .content a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--line); }
+  .content a:hover { text-decoration-color: var(--ink); opacity: 1; }
+
+  @media (max-width: 980px) {
+    .doc { grid-template-columns: 1fr; gap: 40px; padding: 40px 20px 80px; }
+    .toc { position: static; }
+    .toc-inner { border-left: none; padding-left: 0; border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+    .nav-center { display: none; }
+  }
+</style>

@@ -1,0 +1,422 @@
+---
+import Base from "../../layouts/Base.astro";
+
+const base = import.meta.env.BASE_URL;
+const repoUrl = "https://github.com/Conner2077/polars-daily-log";
+const releasesUrl = `${repoUrl}/releases`;
+const bootstrapUrl = `https://raw.githubusercontent.com/Conner2077/polars-daily-log/master/bootstrap.sh`;
+
+const toc = [
+  { id: "overview",      label: "1. 这是什么" },
+  { id: "install",       label: "2. 安装" },
+  { id: "first-run",     label: "3. 首次配置" },
+  { id: "daily",         label: "4. 日常使用" },
+  { id: "data",          label: "5. 数据位置 & 隐私" },
+  { id: "upgrade",       label: "6. 升级 & 卸载" },
+  { id: "troubleshoot",  label: "7. 常见问题" },
+  { id: "developer",     label: "8. 给开发者" },
+];
+---
+
+<Base title="帮助文档 — Polars Daily Log" description="Polars Daily Log 的安装、配置、日常使用与故障排查指南。">
+  <!-- NAV ──────────────────────────────────────────────────── -->
+  <header class="nav">
+    <div class="nav-inner">
+      <a class="brand" href={base}>
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.4" opacity="0.3"/>
+            <circle cx="12" cy="12" r="5" fill="currentColor"/>
+          </svg>
+        </span>
+        <span>Polars Daily Log</span>
+      </a>
+      <nav class="nav-center">
+        <a href={base}>首页</a>
+        <a href={`${base}/help`} class="active">帮助</a>
+        <a href={repoUrl} target="_blank" rel="noopener">GitHub</a>
+        <a href={`${repoUrl}/blob/master/CHANGELOG.md`} target="_blank" rel="noopener">更新日志</a>
+      </nav>
+      <a class="nav-cta" href={`${base}/help/en`}>EN</a>
+    </div>
+  </header>
+
+  <main class="doc">
+    <!-- SIDEBAR TOC ─────────────────────────────────────────── -->
+    <aside class="toc">
+      <div class="toc-inner">
+        <p class="toc-title">目录</p>
+        <ul>
+          {toc.map((t) => (
+            <li><a href={`#${t.id}`}>{t.label}</a></li>
+          ))}
+        </ul>
+        <p class="toc-foot">
+          <a href={`${base}/help/en`}>English version →</a>
+        </p>
+      </div>
+    </aside>
+
+    <!-- CONTENT ─────────────────────────────────────────────── -->
+    <article class="content">
+      <header class="doc-head">
+        <p class="eyebrow">用户手册</p>
+        <h1>使用帮助</h1>
+        <p class="lede">
+          从零装起、跑起来、日常维护、排故障 —— 一篇看完。
+          本项目是个人工具：一人一套数据，全部留在你自己机器上。
+        </p>
+      </header>
+
+      <!-- 1. ──────────────────────────────────────────────── -->
+      <section id="overview">
+        <h2>1. 这是什么</h2>
+        <p>
+          Polars Daily Log 是一个本地运行的个人工作活动聚合器。它默默记录你每台机器上的前台活动
+          （app、窗口标题、URL、可选 OCR）和 Git commits，交给 LLM 总结成当日工作日志，
+          可以一键推给 Jira 作为 worklog。
+        </p>
+        <p class="callout">
+          <strong>一人一套数据。</strong>
+          不是 SaaS，也不是多租户。每个用户自己装一套，
+          server / collector 都跑在你自己的机器上，数据不出门。
+        </p>
+        <h3>你的使用场景</h3>
+        <ul>
+          <li><strong>只用一台电脑</strong>：这台装 <code>both</code>（server + collector 一体）。</li>
+          <li><strong>多台设备想汇总</strong>：最常开机那台装 <code>both</code> 当 hub；其他机器装 <code>collector</code>，推到 hub。</li>
+          <li><strong>想改代码</strong>：clone 仓库走 dev 模式，见 <a href="#developer">§8</a>。</li>
+        </ul>
+      </section>
+
+      <!-- 2. INSTALL ─────────────────────────────────────────── -->
+      <section id="install">
+        <h2>2. 安装</h2>
+
+        <h3>前置条件</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th></th><th>macOS</th><th>Linux</th><th>Windows</th></tr></thead>
+            <tbody>
+              <tr><td>Python 3.9+</td><td>自带</td><td>自带</td><td><code>winget install Python.Python.3.12</code></td></tr>
+              <tr><td>Git</td><td><code>xcode-select --install</code></td><td><code>apt install git</code></td><td><code>winget install Git.Git</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>方式 A：一条命令装（推荐，macOS / Linux）</h3>
+        <pre><code>curl -fsSL {bootstrapUrl} | bash</code></pre>
+        <p>
+          会做：拉最新 release → 解压到 <code>~/.polars-daily-log</code> → 交互跑 <code>install.sh</code>。
+        </p>
+
+        <h4>非交互模式（装 collector 到第二台机器）</h4>
+        <pre><code>{`curl -fsSL ${bootstrapUrl} | \\
+  PDL_ROLE=collector \\
+  PDL_SERVER_URL=http://你的hub:8888 \\
+  PDL_COLLECTOR_NAME=my-laptop \\
+  bash`}</code></pre>
+
+        <h4>可选环境变量</h4>
+        <ul class="kv">
+          <li><code>PDL_VERSION</code> — 指定版本，默认 <code>latest</code></li>
+          <li><code>PDL_INSTALL_DIR</code> — 安装目录，默认 <code>~/.polars-daily-log</code></li>
+          <li><code>PDL_ROLE</code> — <code>server</code> / <code>collector</code> / <code>both</code> / <code>ask</code></li>
+          <li><code>PDL_SERVER_URL</code> — collector 连向的 server 地址</li>
+          <li><code>PDL_COLLECTOR_NAME</code> — collector 在 hub 上的显示名</li>
+        </ul>
+
+        <h3>方式 B：手动装 tarball（Windows 或离线）</h3>
+        <ol>
+          <li>从 <a href={releasesUrl} target="_blank" rel="noopener">Releases 页</a>下载 <code>polars-daily-log-&lt;version&gt;.tar.gz</code></li>
+          <li>解压：<code>tar xzf polars-daily-log-0.2.0.tar.gz &amp;&amp; cd polars-daily-log-0.2.0</code></li>
+          <li>跑 installer：
+            <pre><code>{`# macOS / Linux
+bash install.sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy Bypass -File install.ps1`}</code></pre>
+          </li>
+        </ol>
+      </section>
+
+      <!-- 3. FIRST RUN ─────────────────────────────────────── -->
+      <section id="first-run">
+        <h2>3. 首次配置</h2>
+
+        <h3>选角色</h3>
+        <p>Installer 会问：</p>
+        <pre><code>{`0. What are you installing?
+  1) server      — 中心服务 + Web UI
+  2) collector   — 活动采集 agent
+  3) both        — 两个都装`}</code></pre>
+        <p>场景对照：</p>
+        <ul>
+          <li><strong>只一台机器</strong>：选 <code>3</code>（both）</li>
+          <li><strong>这台是 hub</strong>：选 <code>3</code>（both）</li>
+          <li><strong>这台只是 collector 推给 hub</strong>：选 <code>2</code>，填 <em>Server URL</em> 和 <em>Collector 显示名</em></li>
+        </ul>
+
+        <h3>启动</h3>
+        <pre><code>{`# 装到 ~/.polars-daily-log 的话（bootstrap 装法）
+~/.polars-daily-log/pdl server start      # server 角色
+~/.polars-daily-log/pdl collector start   # collector 角色
+~/.polars-daily-log/pdl start             # both 角色（一起起）`}</code></pre>
+        <p>把 <code>pdl</code> 加到 PATH 更方便：</p>
+        <pre><code>{`echo 'export PATH="$HOME/.polars-daily-log:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+pdl status`}</code></pre>
+
+        <h3>打开 Web UI</h3>
+        <p>浏览器访问 <code>http://127.0.0.1:8888</code>（或 hub 机器 IP）。首次进去到 <strong>Settings</strong>：</p>
+        <ul>
+          <li><strong>LLM</strong> — 选 Kimi / OpenAI / Claude / Ollama，填 API Key（留空走内置 Kimi 默认）</li>
+          <li><strong>Jira（可选）</strong> — 若要把日志同步成 Jira worklog，扫码登录 Jira SSO</li>
+        </ul>
+      </section>
+
+      <!-- 4. DAILY ─────────────────────────────────────────── -->
+      <section id="daily">
+        <h2>4. 日常使用</h2>
+
+        <h3>起停</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>目的</th><th>命令</th></tr></thead>
+            <tbody>
+              <tr><td>启动全部</td><td><code>pdl start</code></td></tr>
+              <tr><td>只启 server</td><td><code>pdl server start</code></td></tr>
+              <tr><td>只启 collector</td><td><code>pdl collector start</code></td></tr>
+              <tr><td>看状态</td><td><code>pdl status</code></td></tr>
+              <tr><td>停</td><td><code>pdl stop</code></td></tr>
+              <tr><td>重启</td><td><code>pdl restart</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>看日志</h3>
+        <pre><code>{`pdl server logs 100       # server 后端最近 100 行
+pdl server logs -f        # 实时跟
+pdl collector logs 50     # collector 最近 50 行`}</code></pre>
+
+        <h3>Windows 等价</h3>
+        <p>Windows 走 Scheduled Task 自启（安装时会问要不要登录时自动起）：</p>
+        <pre><code>{`Start-ScheduledTask -TaskName AutoDailyLogServer
+Stop-ScheduledTask -TaskName AutoDailyLogServer
+Get-ScheduledTaskInfo -TaskName AutoDailyLogCollector`}</code></pre>
+
+        <h3>反馈 bug</h3>
+        <p>Web UI 右上角 <strong>💡</strong> 按钮 — 写几句话，后台自动附上当前页面和 UA 发到开发者。</p>
+      </section>
+
+      <!-- 5. DATA ──────────────────────────────────────────── -->
+      <section id="data">
+        <h2>5. 数据位置 &amp; 隐私</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>东西</th><th>路径</th></tr></thead>
+            <tbody>
+              <tr><td>数据库（活动、日志、配置）</td><td><code>~/.auto_daily_log/data.db</code></td></tr>
+              <tr><td>截图</td><td><code>~/.auto_daily_log/screenshots/YYYY-MM-DD/</code></td></tr>
+              <tr><td>Server log</td><td><code>~/.auto_daily_log/logs/server.log</code></td></tr>
+              <tr><td>独立 Collector log</td><td><code>~/.auto_daily_log_collector/logs/collector.log</code></td></tr>
+              <tr><td>Server 配置</td><td><code>&lt;安装目录&gt;/config.yaml</code></td></tr>
+              <tr><td>Collector 配置</td><td><code>&lt;安装目录&gt;/collector.yaml</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="callout">
+          升级覆盖 tarball 时，<code>~/</code> 下这些<strong>都不会动</strong>。升级不丢数据。
+        </p>
+
+        <h3>隐私相关</h3>
+        <ul>
+          <li><code>monitor.privacy.blocked_apps</code> / <code>blocked_urls</code> 严格尊重 —— 命中的活动不记录。</li>
+          <li>反侦测 app（如企业微信）在 <code>hostile_apps_applescript</code> 白名单里会跳过深度 introspection。</li>
+          <li>OCR 中若出现敏感信息（密码、银行卡），用户手动删除后回收站也会真删。</li>
+        </ul>
+      </section>
+
+      <!-- 6. UPGRADE ───────────────────────────────────────── -->
+      <section id="upgrade">
+        <h2>6. 升级 &amp; 卸载</h2>
+
+        <h3>升级（bootstrap 装的）</h3>
+        <p>再跑同一条 curl 命令即可，原地覆盖。bootstrap 会先 <code>pdl stop</code>，<code>~/</code> 下的数据不受影响。</p>
+
+        <h3>升级（手动装的）</h3>
+        <pre><code>{`cd <你解压过的目录>
+./pdl stop
+tar xzf polars-daily-log-0.2.0.tar.gz --strip-components=1
+./pdl build --restart`}</code></pre>
+        <p>如果某版本要求 config 迁移，会在 <code>CHANGELOG.md</code> 顶部明确写出来。</p>
+
+        <h3>卸载</h3>
+        <pre><code>{`./pdl stop
+rm -rf ~/.polars-daily-log            # 代码 + venv + 配置
+rm -rf ~/.auto_daily_log              # 数据 + 日志（不想删可跳过）
+rm -rf ~/.auto_daily_log_collector    # 独立 collector 凭据 + 离线队列`}</code></pre>
+        <p>Windows 额外：</p>
+        <pre><code>{`Unregister-ScheduledTask -TaskName AutoDailyLogServer -Confirm:$false
+Unregister-ScheduledTask -TaskName AutoDailyLogCollector -Confirm:$false`}</code></pre>
+      </section>
+
+      <!-- 7. TROUBLE ───────────────────────────────────────── -->
+      <section id="troubleshoot">
+        <h2>7. 常见问题</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>症状</th><th>怎么查 / 怎么修</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>No module named aiosqlite</code> 启动就崩</td>
+                <td>venv 没激活 / 跳过了 <code>install.sh</code>。重跑 <code>bash install.sh</code>。</td>
+              </tr>
+              <tr>
+                <td>当日总结只有 <code>Activity summary: ...</code> 行</td>
+                <td>LLM 调用失败 → Web UI Settings 检查 engine / URL / API Key。</td>
+              </tr>
+              <tr>
+                <td>提交 Jira 返 500 <code>内部服务器错误</code></td>
+                <td>comment 含 emoji。新版已自动 scrub，升级一下。</td>
+              </tr>
+              <tr>
+                <td>企业微信 2-4 分钟自退</td>
+                <td>确认 <code>config.yaml</code> 里 <code>monitor.hostile_apps_applescript</code> 包含 <code>企业微信/wechat/wecom</code>。</td>
+              </tr>
+              <tr>
+                <td>前端白屏</td>
+                <td><code>pdl server logs 50</code> 看后端；硬刷浏览器 Cmd/Ctrl+Shift+R。</td>
+              </tr>
+              <tr>
+                <td>Windows collector 不动</td>
+                <td>看 <code>%USERPROFILE%\.auto_daily_log_collector\logs\collector.log</code>；检查 Scheduled Task 状态。</td>
+              </tr>
+              <tr>
+                <td>macOS collector 抓不到窗口标题</td>
+                <td>系统设置 → 隐私与安全 → 辅助功能里，给 Terminal / iTerm2 勾选权限。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 8. DEVELOPER ─────────────────────────────────────── -->
+      <section id="developer">
+        <h2>8. 给开发者</h2>
+        <p>如果你拿到的是 git 仓库而不是 tarball，想改代码：</p>
+        <pre><code>{`git clone ${repoUrl}.git
+cd polars-daily-log
+bash install.sh           # 自动识别无 wheel → dev 模式
+./pdl server start`}</code></pre>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>目的</th><th>命令</th></tr></thead>
+            <tbody>
+              <tr><td>pull 后重新 build</td><td><code>./pdl build --restart</code></td></tr>
+              <tr><td>只重建前端</td><td><code>./pdl build --no-python</code></td></tr>
+              <tr><td>跑测试</td><td><code>.venv/bin/python -m pytest tests/ -q</code></td></tr>
+              <tr><td>前端 hot-reload</td><td><code>cd web/frontend &amp;&amp; npm run dev</code>，打开 <code>localhost:5173</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          打 release：见 <a href={`${repoUrl}/blob/master/docs/release.md`} target="_blank" rel="noopener">docs/release.md</a>。
+          项目核心原则：见 <a href={`${repoUrl}/blob/master/AGENTS.md`} target="_blank" rel="noopener">AGENTS.md</a>。
+        </p>
+      </section>
+
+      <footer class="doc-foot">
+        <p>还有问题？去 <a href={`${repoUrl}/issues/new`} target="_blank" rel="noopener">GitHub Issues</a> 反馈。</p>
+      </footer>
+    </article>
+  </main>
+</Base>
+
+<style>
+  /* ─── NAV (same as landing) ───────────────────────────── */
+  .nav { position: sticky; top: 0; z-index: 20; background: rgba(255,255,255,0.85); backdrop-filter: saturate(1.5) blur(16px); -webkit-backdrop-filter: saturate(1.5) blur(16px); border-bottom: 1px solid var(--line); }
+  .nav-inner { max-width: 1280px; margin: 0 auto; padding: 16px 32px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+  .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; color: var(--ink); }
+  .nav-center { display: flex; align-items: center; gap: 32px; font-size: 15px; }
+  .nav-center a { color: var(--ink-muted); font-weight: 400; }
+  .nav-center a.active { color: var(--ink); font-weight: 500; }
+  .nav-center a:hover { color: var(--ink); opacity: 1; }
+  .nav-cta { display: inline-flex; padding: 7px 18px; background: var(--ink); color: var(--bg) !important; border-radius: 999px; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; }
+  .nav-cta:hover { opacity: 0.85; }
+
+  /* ─── DOC layout ──────────────────────────────────────── */
+  .doc {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 60px 32px 120px;
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    gap: 72px;
+    align-items: start;
+  }
+
+  /* ─── TOC ─────────────────────────────────────────────── */
+  .toc { position: sticky; top: 80px; }
+  .toc-inner { border-left: 1px solid var(--line); padding-left: 24px; }
+  .toc-title { margin: 0 0 16px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-muted); font-weight: 600; }
+  .toc ul { list-style: none; padding: 0; margin: 0 0 32px; display: flex; flex-direction: column; gap: 10px; }
+  .toc li a { font-size: 14px; color: var(--ink-muted); display: block; line-height: 1.5; }
+  .toc li a:hover { color: var(--ink); opacity: 1; }
+  .toc-foot { margin: 0; font-size: 13px; color: var(--ink-dim); }
+  .toc-foot a { color: var(--ink-muted); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--line); }
+
+  /* ─── CONTENT ─────────────────────────────────────────── */
+  .content { max-width: 760px; color: var(--ink-soft); line-height: 1.72; }
+  .doc-head { margin-bottom: 72px; padding-bottom: 40px; border-bottom: 1px solid var(--line); }
+  .eyebrow { margin: 0 0 14px; font-size: 13px; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500; }
+  .content h1 { font-size: clamp(40px, 5vw, 60px); line-height: 1.05; font-weight: 800; letter-spacing: -0.035em; margin: 0 0 24px; color: var(--ink); }
+  .lede { font-size: 18px; color: var(--ink-muted); line-height: 1.7; max-width: 620px; margin: 0; }
+
+  section { margin-top: 72px; scroll-margin-top: 96px; }
+  section:first-of-type { margin-top: 0; }
+  .content h2 { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 24px; color: var(--ink); }
+  .content h3 { font-size: 19px; font-weight: 700; margin: 36px 0 14px; letter-spacing: -0.012em; color: var(--ink); }
+  .content h4 { font-size: 16px; font-weight: 600; margin: 24px 0 10px; color: var(--ink); }
+  .content p { margin: 14px 0; font-size: 16px; }
+  .content ul, .content ol { margin: 14px 0; padding-left: 22px; }
+  .content li { margin: 6px 0; }
+  .content ul.kv li { margin: 8px 0; }
+  .content pre { margin: 16px 0; font-size: 13px; }
+  .content pre code { font-size: inherit; }
+
+  .callout {
+    background: var(--bg-soft);
+    border-left: 3px solid var(--ink);
+    padding: 16px 20px;
+    margin: 20px 0;
+    border-radius: 0 6px 6px 0;
+    color: var(--ink-soft);
+    font-size: 15.5px;
+  }
+  .callout strong { color: var(--ink); }
+
+  /* tables */
+  .table-wrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--line); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  thead th { text-align: left; padding: 12px 16px; font-weight: 600; color: var(--ink); background: var(--bg-soft); border-bottom: 1px solid var(--line); }
+  tbody td { padding: 12px 16px; border-bottom: 1px solid var(--line-soft); color: var(--ink-soft); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+
+  /* doc footer */
+  .doc-foot { margin-top: 96px; padding-top: 32px; border-top: 1px solid var(--line); font-size: 14px; color: var(--ink-muted); }
+  .doc-foot a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+  .doc-foot a:hover { opacity: 0.6; }
+
+  /* links inside content */
+  .content a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--line); }
+  .content a:hover { text-decoration-color: var(--ink); opacity: 1; }
+
+  /* ─── RESPONSIVE ─────────────────────────────────────── */
+  @media (max-width: 980px) {
+    .doc { grid-template-columns: 1fr; gap: 40px; padding: 40px 20px 80px; }
+    .toc { position: static; }
+    .toc-inner { border-left: none; padding-left: 0; border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+    .nav-center { display: none; }
+  }
+</style>
