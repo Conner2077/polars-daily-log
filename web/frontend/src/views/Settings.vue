@@ -218,6 +218,21 @@
           </div>
           <el-input v-model="settings.period_summary_prompt" type="textarea" :rows="12" />
         </div>
+
+        <div class="prompt-section">
+          <h4 class="card-title">活动内容猜测 Prompt</h4>
+          <p class="card-description">
+            <strong>用途：</strong>每条活动入库后，后台 worker 调 LLM 为它生成一段 ≤100 字的「此刻在做什么」摘要，
+            存到 <code>activities.llm_summary</code>。后续每日日志生成时优先用这些语义密度高的摘要替代原始 OCR 片段。
+          </p>
+          <p class="card-hint">
+            可用变量：<code>{prev_summaries}</code> 最近 3 条已成功摘要、<code>{timestamp}</code>、<code>{app_name}</code>、<code>{window_title}</code>、<code>{url}</code>、<code>{tab_title}</code>、<code>{ocr_text}</code>、<code>{wecom_group}</code>
+          </p>
+          <div class="prompt-toolbar">
+            <el-button size="small" link @click="resetPrompt('activity_summary_prompt')">恢复默认</el-button>
+          </div>
+          <el-input v-model="settings.activity_summary_prompt" type="textarea" :rows="12" />
+        </div>
       </div>
     </div>
 
@@ -430,7 +445,7 @@ const settings = ref({
   monitor_interval_sec: 30, monitor_ocr_enabled: true, monitor_ocr_engine: 'auto',
   monitor_screenshot_retention_days: 7, jira_server_url: '', jira_pat: '', jira_auth_mode: 'cookie', jira_cookie: '',
   llm_engine: 'openai_compat', llm_api_key: '', llm_model: '', llm_base_url: '',
-  summarize_prompt: '', auto_approve_prompt: '', period_summary_prompt: '',
+  summarize_prompt: '', auto_approve_prompt: '', period_summary_prompt: '', activity_summary_prompt: '',
   scheduler_enabled: true, scheduler_trigger_time: '18:00',
   auto_approve_enabled: true, auto_approve_trigger_time: '21:30',
   activity_retention_days: 7, recycle_retention_days: 30,
@@ -509,6 +524,7 @@ const defaultPrompts = ref({
   summarize_prompt: '',
   auto_approve_prompt: '',
   period_summary_prompt: '',
+  activity_summary_prompt: '',
 })
 
 async function loadSettings() {
@@ -597,7 +613,7 @@ async function loadDefaultPrompts() {
     defaultPrompts.value = res.data
     // If the stored setting is empty (meaning "use default"), prefill the
     // textarea with the default so users can edit inline.
-    for (const key of ['summarize_prompt', 'auto_approve_prompt', 'period_summary_prompt']) {
+    for (const key of ['summarize_prompt', 'auto_approve_prompt', 'period_summary_prompt', 'activity_summary_prompt']) {
       if (!settings.value[key] || settings.value[key].trim() === '') {
         settings.value[key] = defaultPrompts.value[key] || ''
       }
@@ -616,7 +632,7 @@ function resetPrompt(key) {
 }
 
 async function saveAll() {
-  const PROMPT_KEYS = new Set(['summarize_prompt', 'auto_approve_prompt', 'period_summary_prompt'])
+  const PROMPT_KEYS = new Set(['summarize_prompt', 'auto_approve_prompt', 'period_summary_prompt', 'activity_summary_prompt'])
   for (const [key, value] of Object.entries(settings.value)) {
     let out = value
     // Prompts: if user didn't change the default, save as empty string so
