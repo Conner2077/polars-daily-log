@@ -148,7 +148,13 @@ import TimelineChart from '../components/charts/TimelineChart.vue'
 const router = useRouter()
 const http = axios.create({ baseURL: '/api' })
 
-const selectedDate = ref(new Date().toISOString().split('T')[0])
+// Use LOCAL date, not UTC — toISOString() shifts past midnight local users
+// back to the previous UTC date.
+function todayLocalISO() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+const selectedDate = ref(todayLocalISO())
 const dashboard = ref({ pending_review_count: 0, submitted_hours: 0, activity_summary: [] })
 const extended = ref({
   work_hours: null,

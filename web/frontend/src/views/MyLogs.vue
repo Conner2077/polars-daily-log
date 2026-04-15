@@ -259,7 +259,12 @@ function renderMarkdown(text) {
   return marked.parse(text)
 }
 
-const selectedDate = ref(new Date().toISOString().split('T')[0])
+// LOCAL date — avoid UTC shift past midnight
+function todayLocalISO() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+const selectedDate = ref(todayLocalISO())
 const drafts = ref([])
 const editingIssue = ref(null)
 const issueEditForm = ref({ issue_key: '', time_spent_hours: 0, summary: '' })
