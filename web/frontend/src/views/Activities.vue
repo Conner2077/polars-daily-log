@@ -123,6 +123,17 @@
               </el-table-column>
               <el-table-column prop="app_name" label="App" width="150" show-overflow-tooltip />
               <el-table-column prop="window_title" label="Title" show-overflow-tooltip />
+              <el-table-column label="LLM 摘要" min-width="220" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <span v-if="row.llm_summary && row.llm_summary !== '(failed)'" class="llm-summary-cell">
+                    {{ row.llm_summary }}
+                  </span>
+                  <span v-else-if="row.llm_summary === '(failed)'" class="llm-summary-failed">
+                    —（识别失败）
+                  </span>
+                  <span v-else class="llm-summary-empty">—</span>
+                </template>
+              </el-table-column>
               <el-table-column label="Duration" width="80">
                 <template #default="{ row }">
                   <span class="duration-cell">{{ formatDuration(row.duration_sec) }}</span>
@@ -184,6 +195,15 @@
                       </el-popconfirm>
                     </div>
                   </div>
+                  <div
+                    v-if="row.llm_summary && row.llm_summary !== '(failed)'"
+                    class="timeline-llm-summary"
+                  >
+                    {{ row.llm_summary }}
+                  </div>
+                  <div v-else-if="row.llm_summary === '(failed)'" class="timeline-llm-failed">
+                    —（识别失败）
+                  </div>
                   <div v-if="row.url" class="timeline-url">{{ row.url }}</div>
                 </div>
               </el-timeline-item>
@@ -210,6 +230,10 @@
           :src="screenshotUrl(previewImage)"
           style="width: 100%; border-radius: 8px; display: block;"
         />
+        <div v-if="previewLlmSummary" class="preview-llm-summary">
+          <div class="preview-llm-label">LLM 摘要</div>
+          <div class="preview-llm-text">{{ previewLlmSummary }}</div>
+        </div>
         <el-collapse v-if="previewOcrText" style="margin-top: 16px;">
           <el-collapse-item title="OCR Text" name="ocr">
             <pre class="ocr-content">{{ previewOcrText }}</pre>
@@ -245,6 +269,7 @@ const searched = ref(false)
 const previewVisible = ref(false)
 const previewImage = ref(null)
 const previewOcrText = ref('')
+const previewLlmSummary = ref('')
 
 const totalHours = computed(() => {
   const sec = activities.value.reduce((s, a) => s + (a.duration_sec || 0), 0)
@@ -343,6 +368,8 @@ function screenshotUrl(path) {
 function showPreview(row) {
   previewImage.value = getScreenshotPath(row)
   previewOcrText.value = getOcrText(row) || ''
+  const llm = row.llm_summary
+  previewLlmSummary.value = (llm && llm !== '(failed)') ? llm : ''
   previewVisible.value = true
 }
 
@@ -664,6 +691,54 @@ onMounted(() => { loadDates(); probeMachines() })
 
 .preview-dialog-body {
   padding: 4px 0;
+}
+
+.llm-summary-cell {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.llm-summary-failed {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.llm-summary-empty {
+  color: var(--text-tertiary);
+}
+
+.timeline-llm-summary {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.timeline-llm-failed {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.preview-llm-summary {
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+}
+
+.preview-llm-label {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+
+.preview-llm-text {
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.5;
 }
 
 .ocr-content {
