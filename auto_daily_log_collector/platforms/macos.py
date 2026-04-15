@@ -4,8 +4,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from auto_daily_log.monitor.idle import get_idle_seconds as _get_idle
-from auto_daily_log.monitor.screenshot import capture_screenshot as _capture
+from auto_daily_log_collector.monitor_internals.idle import get_idle_seconds as _get_idle
+from auto_daily_log_collector.monitor_internals.screenshot import capture_screenshot as _capture
 from shared.schemas import (
     CAPABILITY_BROWSER_TAB,
     CAPABILITY_IDLE,

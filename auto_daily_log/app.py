@@ -14,7 +14,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from .config import AppConfig, load_config
 from .models.database import Database
-from .monitor.service import MonitorService
 from .scheduler.jobs import DailyWorkflow
 from .summarizer.engine import get_llm_engine
 from .search.embedding import get_embedding_engine
@@ -27,7 +26,9 @@ class Application:
     def __init__(self, config: AppConfig):
         self.config = config
         self.db: Database = None
-        self.monitor: MonitorService = None
+        # Replaced by CollectorRuntime in phase 5; kept as attribute for
+        # start/stop lifecycle management.
+        self.monitor = None
         self.scheduler: AsyncIOScheduler = None
 
     async def _init_db(self) -> None:
@@ -41,8 +42,11 @@ class Application:
             # Pure-server mode: no built-in collector
             self.monitor = None
             return
-        screenshot_dir = self.config.system.resolved_data_dir / "screenshots"
-        self.monitor = MonitorService(self.db, self.config.monitor, screenshot_dir)
+        # Built-in collector construction happens in phase 5 (CollectorRuntime
+        # with LocalSQLiteBackend). Temporarily None so server still boots
+        # during the refactor — tests that cover monitor.enabled=True are
+        # rewritten in phase 6.
+        self.monitor = None
 
     async def _register_builtin_collector(self) -> None:
         """Auto-register the built-in monitor as collector machine_id='local'.
@@ -180,7 +184,7 @@ class Application:
         watchdog_task = None
         if self.monitor is not None:
             monitor_task = asyncio.create_task(self.monitor.start())
-            from .monitor.watchdog import WecomWatchdog
+            from auto_daily_log_collector.monitor_internals.watchdog import WecomWatchdog
             dump_dir = self.config.system.resolved_data_dir / "watchdog"
             watchdog = WecomWatchdog(self.monitor.trace, dump_dir)
             watchdog_task = asyncio.create_task(watchdog.start())

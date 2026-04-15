@@ -1,5 +1,5 @@
 import pytest
-from auto_daily_log.monitor.classifier import classify_activity
+from auto_daily_log_collector.monitor_internals.classifier import classify_activity
 
 def test_classify_coding_by_app():
     cat, conf, hints = classify_activity("Visual Studio Code", "main.py — project", None)

@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from auto_daily_log.monitor import screenshot
+from auto_daily_log_collector.monitor_internals import screenshot
 
 
 def test_capture_screenshot_prefers_portal_backend_on_wayland(tmp_path, monkeypatch):
@@ -17,7 +17,7 @@ def test_capture_screenshot_prefers_portal_backend_on_wayland(tmp_path, monkeypa
     backend.capture_to_file.side_effect = portal_capture
     monkeypatch.setattr(screenshot, '_get_wayland_portal_backend', lambda output_dir: backend)
 
-    with patch('auto_daily_log.monitor.screenshot.subprocess.run') as mock_run:
+    with patch('auto_daily_log_collector.monitor_internals.screenshot.subprocess.run') as mock_run:
         path = screenshot.capture_screenshot(tmp_path)
 
     assert path == tmp_path / path.name
@@ -39,7 +39,7 @@ def test_capture_screenshot_falls_back_to_legacy_when_portal_capture_fails(tmp_p
         output = Path(cmd[-1])
         output.write_bytes(b'legacy')
 
-    with patch('auto_daily_log.monitor.screenshot.subprocess.run', side_effect=fake_run) as mock_run:
+    with patch('auto_daily_log_collector.monitor_internals.screenshot.subprocess.run', side_effect=fake_run) as mock_run:
         path = screenshot.capture_screenshot(tmp_path)
 
     assert path == tmp_path / path.name

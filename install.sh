@@ -432,7 +432,7 @@ verify() {
     python3 -c "import sqlite_vec" 2>/dev/null && ok "sqlite_vec (vector index)" || { fail "sqlite_vec — run: pip install -e ."; import_ok=0; }
     python3 -c "import fastapi, uvicorn, httpx, apscheduler, pydantic, yaml, imagehash, PIL" 2>/dev/null && ok "FastAPI + core deps" || { fail "Core Python deps missing — run: pip install -e ."; import_ok=0; }
     python3 -c "from auto_daily_log.app import Application" 2>/dev/null && ok "Core module import" || { fail "Core module import"; import_ok=0; }
-    python3 -c "from auto_daily_log.monitor.platforms.detect import get_platform_module; m = get_platform_module(); print(type(m).__name__)" 2>/dev/null && ok "Platform detection" || { fail "Platform detection"; import_ok=0; }
+    python3 -c "from auto_daily_log_collector.monitor_internals.platforms.detect import get_platform_module; m = get_platform_module(); print(type(m).__name__)" 2>/dev/null && ok "Platform detection" || { fail "Platform detection"; import_ok=0; }
     python3 -c "from auto_daily_log.web.app import create_app" 2>/dev/null && ok "Web app import" || { fail "Web app import"; import_ok=0; }
 
     # Platform-specific checks

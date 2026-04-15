@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 from PIL import Image, ImageDraw
-from auto_daily_log.monitor.phash import compute_phash, is_similar
+from auto_daily_log_collector.monitor_internals.phash import compute_phash, is_similar
 
 @pytest.fixture
 def identical_images(tmp_path):

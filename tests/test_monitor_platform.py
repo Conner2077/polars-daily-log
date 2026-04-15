@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch
-from auto_daily_log.monitor.platforms.detect import get_current_platform, get_platform_module
-from auto_daily_log.monitor.platforms.base import PlatformAPI
+from auto_daily_log_collector.monitor_internals.platforms.detect import get_current_platform, get_platform_module
+from auto_daily_log_collector.monitor_internals.platforms.base import PlatformAPI
 
 
 def test_get_current_platform():

@@ -16,7 +16,7 @@ def test_gnome_wayland_api_reads_state_file(state_file):
         encoding='utf-8',
     )
 
-    from auto_daily_log.monitor.platforms.gnome_wayland import GnomeWaylandAPI
+    from auto_daily_log_collector.monitor_internals.platforms.gnome_wayland import GnomeWaylandAPI
 
     api = GnomeWaylandAPI()
 
@@ -31,8 +31,8 @@ def test_detect_prefers_gnome_wayland_provider(monkeypatch, state_file):
     monkeypatch.setenv('WAYLAND_DISPLAY', 'wayland-0')
     monkeypatch.setenv('GNOME_SHELL_SESSION_MODE', 'zorin')
 
-    from auto_daily_log.monitor.platforms.detect import get_platform_module
-    from auto_daily_log.monitor.platforms.gnome_wayland import GnomeWaylandAPI
+    from auto_daily_log_collector.monitor_internals.platforms.detect import get_platform_module
+    from auto_daily_log_collector.monitor_internals.platforms.gnome_wayland import GnomeWaylandAPI
 
     module = get_platform_module()
     assert isinstance(module, GnomeWaylandAPI)
@@ -109,7 +109,7 @@ def test_gnome_wayland_api_prefers_active_window(monkeypatch):
                 FakeApp('Google Chrome', [FakeChild('Wayland - Chrome', active=True)]),
             ])
 
-    from auto_daily_log.monitor.platforms import gnome_wayland
+    from auto_daily_log_collector.monitor_internals.platforms import gnome_wayland
     monkeypatch.setattr(gnome_wayland, '_import_atspi', lambda: FakeAtspi)
 
     api = gnome_wayland.GnomeWaylandAPI(state_file='/tmp/does-not-exist')
@@ -120,7 +120,7 @@ def test_gnome_wayland_api_prefers_active_window(monkeypatch):
 def test_gnome_wayland_api_sanitizes_window_title(state_file):
     state_file.write_text('{"app_name":"Google Chrome","window_title":"\u200d\u200bMpp query time analyze - Google Chrome"}', encoding='utf-8')
 
-    from auto_daily_log.monitor.platforms.gnome_wayland import GnomeWaylandAPI
+    from auto_daily_log_collector.monitor_internals.platforms.gnome_wayland import GnomeWaylandAPI
 
     api = GnomeWaylandAPI()
     assert api.get_window_title('Google Chrome') == 'Mpp query time analyze - Google Chrome'
