@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from ...summarizer import prompt as prompt_module
 from ...summarizer.prompt import render_prompt
+from .chat_retrieval import extract_issue_keys, parse_date_anchors
 from .worklogs import _get_llm_engine_from_settings
 
 router = APIRouter(tags=["chat"])
@@ -38,6 +39,10 @@ DEFAULT_CONTEXT_DAYS = 2
 MAX_CONTEXT_DAYS = 14
 MAX_ACTIVITY_SUMMARIES = 15
 MAX_DRAFT_ROWS = 10
+# Anchored queries (date / issue explicitly mentioned) are worth more
+# context — the user is asking about a specific slice, so pack more of it.
+MAX_ACTIVITY_SUMMARIES_ANCHORED = 80
+MAX_DRAFT_ROWS_ANCHORED = 30
 SESSION_TITLE_MAX = 40
 
 
@@ -74,29 +79,69 @@ async def chat(body: ChatRequest, request: Request):
     today = date.today()
     window = body.context_days if body.context_days is not None else DEFAULT_CONTEXT_DAYS
     window = max(1, min(window, MAX_CONTEXT_DAYS))
-    since = (today - timedelta(days=window)).isoformat()
 
-    summaries = await db.fetch_all(
-        "SELECT date, issue_key, full_summary, summary, time_spent_sec "
-        "FROM worklog_drafts "
-        "WHERE date >= ? AND (tag IS NULL OR tag = 'daily') "
-        "ORDER BY date DESC LIMIT ?",
-        (since, MAX_DRAFT_ROWS),
-    )
-    activities = await db.fetch_all(
-        "SELECT timestamp, llm_summary FROM activities "
-        "WHERE timestamp >= ? "
-        "  AND llm_summary IS NOT NULL "
-        "  AND llm_summary NOT IN ('(failed)', '(skipped-risk)') "
-        "  AND (deleted_at IS NULL) "
-        "ORDER BY timestamp DESC LIMIT ?",
-        (since, MAX_ACTIVITY_SUMMARIES),
-    )
+    # Resolve the retrieval scope from the user's question. Order of precedence:
+    # 1. Explicit dates mentioned → use those dates exactly (ignore context_days)
+    # 2. Issue keys mentioned → pull jira_issues rows for those keys in addition
+    #    to the time/date window (so the LLM sees titles + descriptions)
+    # 3. Neither → fall back to the rolling time window
+    date_anchors = parse_date_anchors(user_question, today)
+    issue_keys = extract_issue_keys(user_question)
+
+    if date_anchors:
+        anchor_strs = [d.isoformat() for d in date_anchors]
+        placeholders = ",".join("?" * len(anchor_strs))
+        summaries = await db.fetch_all(
+            f"SELECT date, issue_key, full_summary, summary, time_spent_sec "
+            f"FROM worklog_drafts "
+            f"WHERE date IN ({placeholders}) AND (tag IS NULL OR tag = 'daily') "
+            f"ORDER BY date DESC LIMIT ?",
+            (*anchor_strs, MAX_DRAFT_ROWS_ANCHORED),
+        )
+        # Activities: timestamp is ISO ``YYYY-MM-DDTHH:MM:SS``. ``date(timestamp)``
+        # in sqlite parses that and returns ``YYYY-MM-DD`` — perfect for IN.
+        activities = await db.fetch_all(
+            f"SELECT timestamp, llm_summary FROM activities "
+            f"WHERE date(timestamp) IN ({placeholders}) "
+            f"  AND llm_summary IS NOT NULL "
+            f"  AND llm_summary NOT IN ('(failed)', '(skipped-risk)') "
+            f"  AND (deleted_at IS NULL) "
+            f"ORDER BY timestamp DESC LIMIT ?",
+            (*anchor_strs, MAX_ACTIVITY_SUMMARIES_ANCHORED),
+        )
+    else:
+        since = (today - timedelta(days=window)).isoformat()
+        summaries = await db.fetch_all(
+            "SELECT date, issue_key, full_summary, summary, time_spent_sec "
+            "FROM worklog_drafts "
+            "WHERE date >= ? AND (tag IS NULL OR tag = 'daily') "
+            "ORDER BY date DESC LIMIT ?",
+            (since, MAX_DRAFT_ROWS),
+        )
+        activities = await db.fetch_all(
+            "SELECT timestamp, llm_summary FROM activities "
+            "WHERE timestamp >= ? "
+            "  AND llm_summary IS NOT NULL "
+            "  AND llm_summary NOT IN ('(failed)', '(skipped-risk)') "
+            "  AND (deleted_at IS NULL) "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (since, MAX_ACTIVITY_SUMMARIES),
+        )
+
+    jira_issue_rows: list[dict] = []
+    if issue_keys:
+        placeholders = ",".join("?" * len(issue_keys))
+        jira_issue_rows = await db.fetch_all(
+            f"SELECT issue_key, summary, description FROM jira_issues "
+            f"WHERE issue_key IN ({placeholders})",
+            tuple(issue_keys),
+        )
 
     prompt = render_prompt(
         prompt_module.DEFAULT_CHAT_PROMPT,
         today=today.isoformat(),
         recent_summaries=_format_summaries(summaries),
+        jira_issues=_format_jira_issues(jira_issue_rows),
         recent_activities=_format_activities(activities),
         history=history or "(无历史)",
         question=user_question or "(空)",
@@ -258,6 +303,23 @@ def _format_activities(rows: list[dict]) -> str:
     if not rows:
         return "(无活动级摘要)"
     return "\n".join(f"- {r['timestamp']}: {r['llm_summary']}" for r in rows)
+
+
+def _format_jira_issues(rows: list[dict]) -> str:
+    """Render the jira_issues block — one bullet per issue with a
+    title + truncated description so the LLM has enough context to
+    answer questions about a task even when no draft has been written
+    against it yet."""
+    if not rows:
+        return "(未提及 Jira 任务)"
+    lines: list[str] = []
+    for r in rows:
+        title = (r.get("summary") or "").strip()
+        desc = (r.get("description") or "").strip()
+        if len(desc) > 120:
+            desc = desc[:120] + "…"
+        lines.append(f"- [{r['issue_key']}] {title} — {desc}")
+    return "\n".join(lines)
 
 
 def _chunk_text(text: str, size: int) -> list[str]:

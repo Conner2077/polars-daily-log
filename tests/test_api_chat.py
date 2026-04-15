@@ -4,7 +4,7 @@ The LLM is monkeypatched — we verify context assembly, SSE framing, and
 error paths, not actual model quality.
 """
 import json
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 import pytest_asyncio
@@ -382,3 +382,167 @@ async def test_chat_session_title_truncated_to_40_chars(app_client, monkeypatch)
     rows = list_resp.json()
     title = [r["title"] for r in rows if r["id"] == session_id][0]
     assert title == "x" * 40
+
+
+# ─── Phase 2: smart retrieval (date anchors + issue keys) ────────────
+
+@pytest.mark.asyncio
+async def test_chat_narrows_to_mentioned_date(app_client, monkeypatch):
+    """When the user says 昨天, only yesterday's draft should be in the prompt —
+    older drafts must not leak in, even if they'd fit in the default window."""
+    today = date.today()
+    yesterday = (today - timedelta(days=1)).isoformat()
+    two_days_ago = (today - timedelta(days=2)).isoformat()
+    three_days_ago = (today - timedelta(days=3)).isoformat()
+
+    await app_client.post("/api/worklogs/seed", json={
+        "date": yesterday,
+        "issue_key": "PDL-YESTERDAY",
+        "time_spent_sec": 3600,
+        "summary": "Yesterday's work marker abc.",
+    })
+    await app_client.post("/api/worklogs/seed", json={
+        "date": two_days_ago,
+        "issue_key": "PDL-OLDER",
+        "time_spent_sec": 1800,
+        "summary": "Two days ago marker xyz.",
+    })
+    await app_client.post("/api/worklogs/seed", json={
+        "date": three_days_ago,
+        "issue_key": "PDL-OLDEST",
+        "time_spent_sec": 1800,
+        "summary": "Three days ago marker qqq.",
+    })
+
+    fake = _FakeLLM()
+    _patch_engine(monkeypatch, fake)
+
+    await app_client.post("/api/chat", json={
+        "messages": [{"role": "user", "text": "昨天干了啥"}],
+    })
+    prompt = fake.prompts[0]
+    assert "Yesterday's work marker abc." in prompt
+    assert "Two days ago marker xyz." not in prompt
+    assert "Three days ago marker qqq." not in prompt
+
+
+@pytest.mark.asyncio
+async def test_chat_uses_week_range_when_mentioned(app_client, monkeypatch):
+    """本周 expands to the full ISO week — all three of this week's drafts
+    should appear in the prompt."""
+    today = date.today()
+    monday = today - timedelta(days=today.isoweekday() - 1)
+    # Seed three distinct dates within the current ISO week.
+    d1 = monday.isoformat()
+    d2 = (monday + timedelta(days=1)).isoformat()
+    d3 = (monday + timedelta(days=2)).isoformat()
+
+    await app_client.post("/api/worklogs/seed", json={
+        "date": d1, "issue_key": "PDL-MON", "time_spent_sec": 3600,
+        "summary": "Monday marker m1.",
+    })
+    await app_client.post("/api/worklogs/seed", json={
+        "date": d2, "issue_key": "PDL-TUE", "time_spent_sec": 3600,
+        "summary": "Tuesday marker m2.",
+    })
+    await app_client.post("/api/worklogs/seed", json={
+        "date": d3, "issue_key": "PDL-WED", "time_spent_sec": 3600,
+        "summary": "Wednesday marker m3.",
+    })
+
+    fake = _FakeLLM()
+    _patch_engine(monkeypatch, fake)
+
+    await app_client.post("/api/chat", json={
+        "messages": [{"role": "user", "text": "本周干了啥"}],
+    })
+    prompt = fake.prompts[0]
+    assert "Monday marker m1." in prompt
+    assert "Tuesday marker m2." in prompt
+    assert "Wednesday marker m3." in prompt
+
+
+@pytest.mark.asyncio
+async def test_chat_injects_jira_issue_context(app_client, monkeypatch):
+    """Mentioning an issue key must pull that issue's title + description
+    into the prompt, even with zero drafts for it."""
+    # Direct DB insert — there's no public endpoint for seeding jira_issues.
+    db = app_client._transport.app.state.db
+    await db.execute(
+        "INSERT INTO jira_issues (issue_key, summary, description) VALUES (?, ?, ?)",
+        ("PDL-42", "Chat UI", "Build the chat page"),
+    )
+
+    fake = _FakeLLM()
+    _patch_engine(monkeypatch, fake)
+
+    await app_client.post("/api/chat", json={
+        "messages": [{"role": "user", "text": "PDL-42 的情况"}],
+    })
+    prompt = fake.prompts[0]
+    assert "PDL-42" in prompt
+    assert "Chat UI" in prompt
+    assert "Build the chat page" in prompt
+
+
+@pytest.mark.asyncio
+async def test_chat_falls_back_to_time_window_without_anchors(app_client, monkeypatch):
+    """No date anchor, no issue key → behave like Phase 1: rolling window,
+    default row caps, jira_issues placeholder rendered as the empty marker."""
+    today = date.today().isoformat()
+    await app_client.post("/api/worklogs/seed", json={
+        "date": today,
+        "issue_key": "PDL-ROLL",
+        "time_spent_sec": 3600,
+        "summary": "Rolling window marker rw1.",
+    })
+
+    fake = _FakeLLM()
+    _patch_engine(monkeypatch, fake)
+
+    await app_client.post("/api/chat", json={
+        "messages": [{"role": "user", "text": "hello"}],
+    })
+    prompt = fake.prompts[0]
+    assert "Rolling window marker rw1." in prompt
+    assert "(未提及 Jira 任务)" in prompt
+
+
+@pytest.mark.asyncio
+async def test_chat_combines_date_and_issue_anchors(app_client, monkeypatch):
+    """Date anchor + issue key: the date narrows the drafts, and the issue
+    key still injects the jira_issues block independently."""
+    today = date.today()
+    yesterday = (today - timedelta(days=1)).isoformat()
+    two_days_ago = (today - timedelta(days=2)).isoformat()
+
+    await app_client.post("/api/worklogs/seed", json={
+        "date": yesterday,
+        "issue_key": "PDL-42",
+        "time_spent_sec": 3600,
+        "summary": "Yesterday progress marker yp1.",
+    })
+    await app_client.post("/api/worklogs/seed", json={
+        "date": two_days_ago,
+        "issue_key": "PDL-42",
+        "time_spent_sec": 3600,
+        "summary": "Two days ago marker older.",
+    })
+
+    db = app_client._transport.app.state.db
+    await db.execute(
+        "INSERT INTO jira_issues (issue_key, summary, description) VALUES (?, ?, ?)",
+        ("PDL-42", "Chat UI", "Build the chat page"),
+    )
+
+    fake = _FakeLLM()
+    _patch_engine(monkeypatch, fake)
+
+    await app_client.post("/api/chat", json={
+        "messages": [{"role": "user", "text": "昨天 PDL-42 的进展"}],
+    })
+    prompt = fake.prompts[0]
+    assert "Yesterday progress marker yp1." in prompt
+    assert "Two days ago marker older." not in prompt
+    assert "Chat UI" in prompt
+    assert "Build the chat page" in prompt
