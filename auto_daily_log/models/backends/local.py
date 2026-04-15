@@ -1,5 +1,6 @@
 """Local SQLite storage backend — used by server's built-in collector."""
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from shared.schemas import ActivityPayload, CommitPayload
@@ -61,3 +62,15 @@ class LocalSQLiteBackend(StorageBackend):
             (machine_id,),
         )
         return None
+
+    async def extend_duration(self, machine_id: str, row_id: int, extra_sec: int) -> None:
+        await self._db.execute(
+            "UPDATE activities SET duration_sec = duration_sec + ? "
+            "WHERE id = ? AND machine_id = ?",
+            (extra_sec, row_id, machine_id),
+        )
+
+    async def save_screenshot(self, machine_id: str, local_path: Path) -> str:
+        # Built-in collector writes screenshots straight into the server's
+        # screenshot dir, so the path is already canonical.
+        return str(local_path)

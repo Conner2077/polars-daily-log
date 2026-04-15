@@ -55,6 +55,46 @@ class HTTPBackend(StorageBackend):
         ids = await self._send("commits", commits, machine_id)
         return len(ids)
 
+    async def extend_duration(self, machine_id: str, row_id: int, extra_sec: int) -> None:
+        """Ask the server to add ``extra_sec`` to ``row_id``'s duration.
+
+        Best-effort: network errors are swallowed because the sampler is
+        about to send another tick in 30 seconds anyway. Dropping an
+        extend means a row is short by one tick, not corrupt.
+        """
+        if extra_sec <= 0:
+            return
+        client = self._get_client()
+        try:
+            await client.post(
+                f"{self._server_url}/api/ingest/extend-duration",
+                json={"row_id": row_id, "extra_sec": extra_sec},
+                headers={"X-Machine-ID": machine_id},
+            )
+        except httpx.HTTPError:
+            pass
+
+    async def save_screenshot(self, machine_id: str, local_path: Path) -> str:
+        """Upload the screenshot and return the server-side path.
+
+        Uses the existing ``/api/ingest/screenshot`` endpoint which takes
+        a ``timestamp`` query string. We reconstruct it from the local
+        filename's mtime so the server can shard by day.
+        """
+        from datetime import datetime
+        client = self._get_client()
+        ts = datetime.fromtimestamp(local_path.stat().st_mtime).isoformat(timespec="seconds")
+        with open(local_path, "rb") as f:
+            files = {"file": (local_path.name, f, "image/png")}
+            r = await client.post(
+                f"{self._server_url}/api/ingest/screenshot",
+                params={"timestamp": ts},
+                headers={"X-Machine-ID": machine_id},
+                files=files,
+            )
+        r.raise_for_status()
+        return r.json()["path"]
+
     async def heartbeat(self, machine_id: str) -> Optional[dict]:
         """Send heartbeat. Returns full response dict (config_override +
         is_paused + server_time) on success, None on network failure."""

@@ -279,4 +279,112 @@ async def test_http_backend_drains_queue_on_success(tmp_path):
     # Queue should be empty after drain
     assert not queue_file.exists() or queue_file.stat().st_size == 0
 
+
+# ─── Phase 3: extend_duration + save_screenshot ─────────────────────
+
+@pytest.mark.asyncio
+async def test_local_backend_extend_duration_adds_seconds(tmp_path):
+    db = Database(tmp_path / "t.db", embedding_dimensions=128)
+    await db.initialize()
+    backend = LocalSQLiteBackend(db)
+
+    ids = await backend.save_activities("m1", [
+        ActivityPayload(timestamp="2026-04-15T10:00:00", app_name="X", duration_sec=30),
+    ])
+    row_id = ids[0]
+
+    await backend.extend_duration("m1", row_id, 15)
+    await backend.extend_duration("m1", row_id, 45)
+
+    row = await db.fetch_one("SELECT duration_sec FROM activities WHERE id = ?", (row_id,))
+    assert row["duration_sec"] == 90
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_local_backend_extend_duration_scoped_to_machine(tmp_path):
+    db = Database(tmp_path / "t.db", embedding_dimensions=128)
+    await db.initialize()
+    backend = LocalSQLiteBackend(db)
+
+    ids = await backend.save_activities("m1", [
+        ActivityPayload(timestamp="2026-04-15T10:00:00", app_name="X", duration_sec=30),
+    ])
+    row_id = ids[0]
+
+    # Wrong machine_id — must not touch the row
+    await backend.extend_duration("other", row_id, 100)
+
+    row = await db.fetch_one("SELECT duration_sec FROM activities WHERE id = ?", (row_id,))
+    assert row["duration_sec"] == 30
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_local_backend_save_screenshot_returns_path_unchanged(tmp_path):
+    db = Database(tmp_path / "t.db", embedding_dimensions=128)
+    await db.initialize()
+    backend = LocalSQLiteBackend(db)
+
+    shot = tmp_path / "2026-04-15" / "s1.png"
+    shot.parent.mkdir(parents=True)
+    shot.write_bytes(b"png")
+
+    result = await backend.save_screenshot("m1", shot)
+    assert result == str(shot)
+    assert Path(result).exists()
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_http_backend_extend_duration_posts_to_server(tmp_path):
+    backend = HTTPBackend(
+        server_url="http://server.test:8080",
+        token="x" * 32,
+        queue_dir=tmp_path,
+    )
+    captured = {}
+
+    async def fake_post(self, url, json=None, headers=None):
+        captured["url"] = url
+        captured["body"] = json
+        captured["headers"] = headers or {}
+        class FakeResp:
+            status_code = 200
+            def raise_for_status(self): pass
+            def json(self): return {"ok": True}
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.post", new=fake_post):
+        await backend.extend_duration("m1", 42, 30)
+
+    assert captured["url"] == "http://server.test:8080/api/ingest/extend-duration"
+    assert captured["body"] == {"row_id": 42, "extra_sec": 30}
+    assert captured["headers"]["X-Machine-ID"] == "m1"
+    await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_http_backend_extend_duration_zero_is_noop(tmp_path):
+    backend = HTTPBackend(
+        server_url="http://server.test:8080",
+        token="x" * 32,
+        queue_dir=tmp_path,
+    )
+    calls = []
+
+    async def fake_post(self, url, json=None, headers=None):
+        calls.append(url)
+        class FakeResp:
+            status_code = 200
+            def raise_for_status(self): pass
+            def json(self): return {"ok": True}
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.post", new=fake_post):
+        await backend.extend_duration("m1", 42, 0)
+
+    assert calls == []
+    await backend.close()
+
     await backend.close()

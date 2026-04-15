@@ -374,3 +374,99 @@ async def test_delete_collector_deactivates_but_keeps_data(tmp_path):
         assert acts[0]["n"] == 1
     finally:
         await db.close()
+
+
+# ─── Extend duration endpoint (Phase 3) ──────────────────────────────
+
+@pytest.mark.asyncio
+async def test_extend_duration_adds_to_existing_row(tmp_path):
+    client, db = await _setup(tmp_path)
+    try:
+        reg = client.post("/api/collectors/register", json=REGISTER_PAYLOAD).json()
+        headers = {
+            "Authorization": f"Bearer {reg['token']}",
+            "X-Machine-ID": reg["machine_id"],
+        }
+        resp = client.post(
+            "/api/ingest/activities",
+            json={"activities": [
+                {"timestamp": "2026-04-15T10:00:00", "app_name": "X", "duration_sec": 30}
+            ]},
+            headers=headers,
+        )
+        row_id = resp.json()["first_id"]
+
+        r = client.post(
+            "/api/ingest/extend-duration",
+            json={"row_id": row_id, "extra_sec": 45},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        assert r.json() == {"ok": True}
+
+        row = await db.fetch_one(
+            "SELECT duration_sec FROM activities WHERE id = ?", (row_id,)
+        )
+        assert row["duration_sec"] == 75
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_extend_duration_scoped_to_authenticated_machine(tmp_path):
+    client, db = await _setup(tmp_path)
+    try:
+        reg_a = client.post("/api/collectors/register", json=REGISTER_PAYLOAD).json()
+        payload_b = {**REGISTER_PAYLOAD, "name": "Other-Mac", "hostname": "other.local"}
+        reg_b = client.post("/api/collectors/register", json=payload_b).json()
+
+        headers_a = {
+            "Authorization": f"Bearer {reg_a['token']}",
+            "X-Machine-ID": reg_a["machine_id"],
+        }
+        resp = client.post(
+            "/api/ingest/activities",
+            json={"activities": [
+                {"timestamp": "2026-04-15T10:00:00", "app_name": "X", "duration_sec": 30}
+            ]},
+            headers=headers_a,
+        )
+        row_id = resp.json()["first_id"]
+
+        # Authenticate as B — try to extend A's row, which should silently miss
+        headers_b = {
+            "Authorization": f"Bearer {reg_b['token']}",
+            "X-Machine-ID": reg_b["machine_id"],
+        }
+        r = client.post(
+            "/api/ingest/extend-duration",
+            json={"row_id": row_id, "extra_sec": 100},
+            headers=headers_b,
+        )
+        assert r.status_code == 200
+
+        row = await db.fetch_one(
+            "SELECT duration_sec FROM activities WHERE id = ?", (row_id,)
+        )
+        assert row["duration_sec"] == 30
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_extend_duration_clamps_extra_sec_upper_bound(tmp_path):
+    client, db = await _setup(tmp_path)
+    try:
+        reg = client.post("/api/collectors/register", json=REGISTER_PAYLOAD).json()
+        headers = {
+            "Authorization": f"Bearer {reg['token']}",
+            "X-Machine-ID": reg["machine_id"],
+        }
+        r = client.post(
+            "/api/ingest/extend-duration",
+            json={"row_id": 1, "extra_sec": 99999},
+            headers=headers,
+        )
+        assert r.status_code == 422
+    finally:
+        await db.close()

@@ -17,6 +17,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Header
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from shared.schemas import (
     ActivityIngestRequest,
@@ -31,6 +32,17 @@ from shared.schemas import (
     HeartbeatResponse,
     ALL_CAPABILITIES,
 )
+
+
+class ExtendDurationRequest(BaseModel):
+    """Request body for POST /ingest/extend-duration.
+
+    ``extra_sec`` is clamped to [0, 3600] so a bad client (or row_id
+    drift across restarts) can't quietly inflate a single row by hours.
+    """
+
+    row_id: int
+    extra_sec: int = Field(..., ge=0, le=3600)
 
 router = APIRouter(tags=["ingest"])
 
@@ -187,6 +199,29 @@ async def ingest_activities(
         first_id=first_id,
         last_id=last_id,
     )
+
+
+# ─── Extend duration (same-window aggregation over HTTP) ────────────
+
+@router.post("/ingest/extend-duration")
+async def ingest_extend_duration(
+    body: ExtendDurationRequest,
+    request: Request,
+    collector: dict = Depends(_authenticate_collector),
+):
+    """Add extra_sec to an existing activity row's duration.
+
+    Used by remote collectors to aggregate same-window samples without
+    inserting a new row each tick. Scoped to the caller's machine_id so
+    a collector can't bump another machine's rows.
+    """
+    db = request.app.state.db
+    await db.execute(
+        "UPDATE activities SET duration_sec = duration_sec + ? "
+        "WHERE id = ? AND machine_id = ?",
+        (body.extra_sec, body.row_id, collector["machine_id"]),
+    )
+    return {"ok": True}
 
 
 # ─── Commit ingestion ────────────────────────────────────────────────
