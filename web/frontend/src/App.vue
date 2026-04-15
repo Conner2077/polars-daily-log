@@ -552,6 +552,14 @@ onBeforeUnmount(() => {
 
 .device-dot.online {
   background: var(--success);
+  box-shadow: 0 0 0 0 rgba(16, 163, 127, 0.55);
+  animation: device-pulse 2s ease-in-out infinite;
+}
+
+@keyframes device-pulse {
+  0%   { box-shadow: 0 0 0 0   rgba(16, 163, 127, 0.55); transform: scale(1); }
+  50%  { box-shadow: 0 0 0 5px rgba(16, 163, 127, 0);    transform: scale(1.15); }
+  100% { box-shadow: 0 0 0 0   rgba(16, 163, 127, 0);    transform: scale(1); }
 }
 
 .device-name {
