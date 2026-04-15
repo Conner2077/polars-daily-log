@@ -59,6 +59,88 @@
             href="#"
             @click.prevent="retry(idx)"
           >重试</a>
+
+          <!-- Worklog extract action (latest AI bubble only, no errors, session set) -->
+          <div
+            v-if="
+              m.role === 'ai' &&
+              !m.error &&
+              idx === lastAiIdx &&
+              sessionId &&
+              !busy &&
+              !draftsPreview
+            "
+            class="extract-action"
+          >
+            <el-button
+              round
+              size="small"
+              :loading="extracting"
+              @click="onExtractWorklog"
+            >整理为工时草稿</el-button>
+          </div>
+
+          <!-- Inline drafts preview + submit bar -->
+          <div
+            v-if="
+              m.role === 'ai' &&
+              idx === lastAiIdx &&
+              draftsPreview
+            "
+            class="drafts-panel"
+          >
+            <div class="drafts-panel-title">生成的工时草稿（可编辑后提交）</div>
+            <div v-if="draftsPreview.length === 0" class="drafts-empty">
+              LLM 没有提取到任何工时条目。
+            </div>
+            <div
+              v-for="(d, dIdx) in draftsPreview"
+              :key="dIdx"
+              class="draft-row"
+              :class="{ failed: d._failed }"
+            >
+              <div class="draft-row-line1">
+                <el-input
+                  v-model="d.issue_key"
+                  size="small"
+                  style="width: 120px"
+                  placeholder="issue_key"
+                />
+                <el-input-number
+                  v-model="d.time_spent_hours"
+                  size="small"
+                  :min="0"
+                  :step="0.5"
+                  controls-position="right"
+                  style="width: 110px"
+                />
+                <span class="draft-row-unit">h</span>
+                <span v-if="d._failed" class="draft-row-err">{{ d._failed }}</span>
+              </div>
+              <el-input
+                v-model="d.summary"
+                size="small"
+                type="textarea"
+                :rows="2"
+                placeholder="summary"
+                style="margin-top: 6px"
+              />
+            </div>
+            <div class="drafts-panel-footer">
+              <el-button
+                size="small"
+                round
+                @click="cancelDraftsPreview"
+              >取消</el-button>
+              <el-button
+                size="small"
+                round
+                type="primary"
+                :loading="pushing"
+                @click="onPushToJira"
+              >提交到 Jira</el-button>
+            </div>
+          </div>
         </div>
 
         <!-- Typing indicator -->
@@ -116,6 +198,119 @@ const sessionId = ref(null)
 // Live AbortController for the in-flight fetch — mutated on ask()/stop().
 let controller = null
 
+// Phase 3 — worklog extraction UI state. Lives on the latest AI bubble.
+const extracting = ref(false)
+const pushing = ref(false)
+const draftsPreview = ref(null)  // null = hidden; array = inline panel visible
+
+const lastAiIdx = computed(() => {
+  for (let i = history.value.length - 1; i >= 0; i--) {
+    if (history.value[i].role === 'ai') return i
+  }
+  return -1
+})
+
+function todayIso() {
+  const d = new Date()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${mm}-${dd}`
+}
+
+async function onExtractWorklog() {
+  if (!sessionId.value || extracting.value) return
+  extracting.value = true
+  try {
+    const resp = await fetch(
+      `/api/chat/sessions/${encodeURIComponent(sessionId.value)}/extract_worklog`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_date: todayIso() }),
+      },
+    )
+    if (!resp.ok) {
+      let msg = `HTTP ${resp.status}`
+      try {
+        const body = await resp.json()
+        if (body && body.detail) {
+          msg = typeof body.detail === 'string'
+            ? body.detail
+            : (body.detail.detail || JSON.stringify(body.detail))
+        }
+      } catch (_) {}
+      ElMessage.error('抽取失败: ' + msg)
+      return
+    }
+    const rows = await resp.json()
+    draftsPreview.value = rows.map(r => ({
+      issue_key: r.issue_key,
+      time_spent_hours: r.time_spent_hours,
+      summary: r.summary,
+      _failed: '',
+    }))
+  } catch (err) {
+    ElMessage.error('抽取失败: ' + (err && err.message ? err.message : err))
+  } finally {
+    extracting.value = false
+  }
+}
+
+function cancelDraftsPreview() {
+  draftsPreview.value = null
+}
+
+async function onPushToJira() {
+  if (!sessionId.value || pushing.value || !draftsPreview.value) return
+  pushing.value = true
+  try {
+    const rowsToSend = draftsPreview.value.map(d => ({
+      issue_key: d.issue_key,
+      time_spent_hours: Number(d.time_spent_hours) || 0,
+      summary: d.summary,
+    }))
+    const resp = await fetch(
+      `/api/chat/sessions/${encodeURIComponent(sessionId.value)}/push_to_jira`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target_date: todayIso(),
+          drafts: rowsToSend,
+        }),
+      },
+    )
+    if (!resp.ok) {
+      let msg = `HTTP ${resp.status}`
+      try {
+        const body = await resp.json()
+        if (body && body.detail) msg = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
+      } catch (_) {}
+      ElMessage.error('提交失败: ' + msg)
+      return
+    }
+    const body = await resp.json()
+    const submitted = Array.isArray(body.submitted) ? body.submitted : []
+    const failed = Array.isArray(body.failed) ? body.failed : []
+    ElMessage.success(`已提交 ${submitted.length} 条，失败 ${failed.length} 条`)
+
+    if (failed.length === 0) {
+      draftsPreview.value = null
+    } else {
+      // Keep the panel open and mark failed rows red so the user can retry.
+      const failMap = new Map(failed.map(f => [f.issue_key, f.error || '提交失败']))
+      draftsPreview.value = draftsPreview.value.map(d => ({
+        ...d,
+        _failed: failMap.get(d.issue_key) || '',
+      }))
+    }
+  } catch (err) {
+    ElMessage.error('提交失败: ' + (err && err.message ? err.message : err))
+  } finally {
+    pushing.value = false
+  }
+}
+
 const suggestions = [
   '最近一周干了啥？',
   '今天的主要工作有哪些？',
@@ -162,6 +357,7 @@ function resetChat() {
   sessionId.value = null
   history.value = []
   draft.value = ''
+  draftsPreview.value = null
   autosize()
 }
 
@@ -197,13 +393,31 @@ function retry(errorIdx) {
 
 // Lightweight markdown renderer — matches DEFAULT_CHAT_PROMPT's output surface.
 // Handles ### headers, **bold**, `code`, "- " bullets, line breaks.
+//
+// Citation linkification: dates (YYYY-MM-DD) → #/my-logs?date=..., issue
+// keys (ABC-123) → #/issues?key=.... Done on the raw text BEFORE backtick
+// code substitution so that `2026-04-16` inside inline code stays literal.
 function renderMd(md) {
   if (!md) return ''
   const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const inline = (s) =>
-    esc(s)
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  const DATE_RE = /\b(\d{4}-\d{2}-\d{2})\b/g
+  const ISSUE_RE = /\b([A-Z][A-Z0-9]+-\d+)\b/g
+  const linkify = (s) =>
+    s.replace(DATE_RE, '<a class="citation" href="#/my-logs?date=$1">$1</a>')
+     .replace(ISSUE_RE, '<a class="citation" href="#/issues?key=$1">$1</a>')
+  const inline = (s) => {
+    const escaped = esc(s)
+    // Split by backtick-delimited spans so we don't linkify citations that
+    // appear inside inline code (e.g. `2026-04-16` as a code sample).
+    const parts = escaped.split(/(`[^`]+`)/)
+    const rebuilt = parts.map((part) => {
+      if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
+        return '<code>' + part.slice(1, -1) + '</code>'
+      }
+      return linkify(part)
+    }).join('')
+    return rebuilt.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  }
 
   const lines = md.split(/\r?\n/)
   let out = ''
@@ -232,6 +446,10 @@ async function ask(text) {
   busy.value = true
   streaming.value = false
   controller = new AbortController()
+  // A new turn invalidates any stale drafts preview attached to the
+  // previous AI bubble — the preview only makes sense for "the current
+  // thread up to right now".
+  draftsPreview.value = null
 
   history.value.push({ role: 'user', text })
   scrollToBottom()
@@ -588,6 +806,76 @@ onMounted(async () => {
 }
 .box:focus { border-color: var(--ink); }
 .box:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* Phase 3 — citation links inside AI bubbles */
+.bubble :deep(a.citation) {
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--line);
+}
+.bubble :deep(a.citation:hover) {
+  text-decoration: underline;
+  border-bottom-color: transparent;
+}
+
+/* Phase 3 — extract-to-draft action + inline preview panel */
+.extract-action {
+  margin-top: 8px;
+}
+.drafts-panel {
+  margin-top: 10px;
+  width: 100%;
+  max-width: 640px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.drafts-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 10px;
+}
+.drafts-empty {
+  font-size: 13px;
+  color: var(--ink-muted);
+  padding: 6px 0;
+}
+.draft-row {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  margin-bottom: 8px;
+}
+.draft-row.failed {
+  border-color: var(--danger);
+}
+.draft-row-line1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.draft-row-unit {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.draft-row-err {
+  font-size: 12px;
+  color: var(--danger);
+  margin-left: auto;
+  max-width: 100%;
+}
+.drafts-panel-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
 
 @media (max-width: 900px) {
   .chat-view { height: calc(100vh - 96px); }

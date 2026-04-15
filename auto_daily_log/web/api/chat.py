@@ -16,6 +16,7 @@ client can pin it to localStorage before any text chunk arrives.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import date, timedelta
 from typing import AsyncGenerator, Optional
@@ -230,6 +231,141 @@ async def delete_session(session_id: str, request: Request):
     return Response(status_code=204)
 
 
+# ─── Phase 3: extract worklog drafts from a chat + push to Jira ──────
+
+class ExtractRequest(BaseModel):
+    target_date: Optional[str] = None  # YYYY-MM-DD. Defaults to today.
+
+
+class PushRequest(BaseModel):
+    drafts: list[dict]  # [{issue_key, time_spent_hours, summary}, ...]
+    target_date: str    # YYYY-MM-DD
+
+
+@router.post("/chat/sessions/{session_id}/extract_worklog")
+async def extract_worklog(session_id: str, body: ExtractRequest, request: Request):
+    """Run the auto-approve prompt against a chat transcript to derive
+    worklog draft rows. Returns a list of dicts the UI can preview + edit
+    before the separate ``push_to_jira`` endpoint actually submits them.
+
+    We deliberately do NOT write to the DB here — the "原汁原味" principle
+    (AGENTS.md) says downstream filtering belongs in the downstream step,
+    and the user gets a chance to tweak before anything is committed.
+    """
+    db = request.app.state.db
+    session = await db.fetch_one(
+        "SELECT id FROM chat_sessions WHERE id = ?", (session_id,)
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    target_date = body.target_date or date.today().isoformat()
+
+    messages = await db.fetch_all(
+        "SELECT role, text FROM chat_messages WHERE session_id = ? ORDER BY id ASC",
+        (session_id,),
+    )
+    transcript = _format_transcript(messages)
+
+    jira_issue_rows = await db.fetch_all(
+        "SELECT issue_key, summary, description FROM jira_issues WHERE is_active = 1",
+        (),
+    )
+
+    prompt = render_prompt(
+        prompt_module.DEFAULT_AUTO_APPROVE_PROMPT,
+        date=target_date,
+        jira_issues=_format_jira_issues(jira_issue_rows),
+        git_commits="(无)",
+        full_summary=transcript or "(无)",
+    )
+
+    llm = await _get_llm_engine_from_settings(db)
+    raw = await llm.generate(prompt)
+
+    parsed = _parse_json_array(raw)
+    if parsed is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "detail": "could not parse LLM output",
+                "raw": (raw or "")[:500],
+            },
+        )
+
+    return _validate_draft_rows(parsed)
+
+
+@router.post("/chat/sessions/{session_id}/push_to_jira")
+async def push_to_jira(session_id: str, body: PushRequest, request: Request):
+    """Submit the (possibly user-edited) drafts to Jira via the single
+    sanctioned entry point ``build_jira_client_from_db`` + ``submit_worklog``
+    (AGENTS.md rule). Records each submit as a ``worklog_drafts`` row for
+    auditability, then returns the partial-success summary.
+    """
+    db = request.app.state.db
+    session = await db.fetch_one(
+        "SELECT id FROM chat_sessions WHERE id = ?", (session_id,)
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    from ...jira_client.client import MissingJiraConfig, build_jira_client_from_db
+
+    try:
+        client = await build_jira_client_from_db(db)
+    except MissingJiraConfig:
+        raise HTTPException(status_code=400, detail="Jira not configured")
+
+    target_date = body.target_date
+    # Jira `started` format matches the daily-submit path (21:00 local
+    # on the target day) so chat-derived worklogs line up with scheduler
+    # output in the history view.
+    started = f"{target_date}T21:00:00.000+0800"
+
+    submitted: list[dict] = []
+    failed: list[dict] = []
+    skip_keys = {"OTHER", "ALL", "DAILY"}
+
+    for draft in body.drafts or []:
+        issue_key = str(draft.get("issue_key") or "").strip()
+        try:
+            hours = float(draft.get("time_spent_hours") or 0)
+        except (TypeError, ValueError):
+            hours = 0.0
+        summary = str(draft.get("summary") or "")
+
+        if not issue_key or issue_key in skip_keys or hours <= 0:
+            continue
+
+        time_sec = int(hours * 3600)
+
+        # Record the draft BEFORE attempting the Jira submit — we want
+        # a persistent trail even if the network call fails (AGENTS.md
+        # 原汁原味 + auditability). The status reflects that the user
+        # already approved these via the UI preview step.
+        await db.execute(
+            "INSERT INTO worklog_drafts "
+            "(date, issue_key, time_spent_sec, summary, status, tag) "
+            "VALUES (?, ?, ?, ?, 'approved', 'daily')",
+            (target_date, issue_key, time_sec, summary),
+        )
+
+        try:
+            result = await client.submit_worklog(
+                issue_key=issue_key,
+                time_spent_sec=time_sec,
+                comment=summary,
+                started=started,
+            )
+            worklog_id = str(result.get("id", "")) if isinstance(result, dict) else ""
+            submitted.append({"issue_key": issue_key, "worklog_id": worklog_id})
+        except Exception as exc:  # noqa: BLE001 — surface message verbatim
+            failed.append({"issue_key": issue_key, "error": str(exc)})
+
+    return {"submitted": submitted, "failed": failed}
+
+
 # ─── helpers ─────────────────────────────────────────────────────────
 
 async def _resolve_session(db, requested_id: Optional[str], user_question: str) -> tuple[str, bool]:
@@ -326,6 +462,87 @@ def _chunk_text(text: str, size: int) -> list[str]:
     if not text:
         return [""]
     return [text[i:i + size] for i in range(0, len(text), size)]
+
+
+def _format_transcript(messages: list[dict]) -> str:
+    """Render the chat log the way the auto-approve prompt expects to see
+    the daily summary — one tagged line per turn so the LLM can tell user
+    questions apart from AI answers."""
+    if not messages:
+        return ""
+    lines: list[str] = []
+    for m in messages:
+        tag = "[USER]" if m.get("role") == "user" else "[AI]"
+        lines.append(f"{tag} {m.get('text', '')}")
+    return "\n".join(lines)
+
+
+def _parse_json_array(raw: str) -> Optional[list]:
+    """Extract a JSON array from an LLM response.
+
+    Robust to:
+    - code fences (```json ... ```)
+    - leading/trailing chatter around the array
+    - arrays embedded in wider text
+
+    Returns ``None`` when no array can be parsed — callers turn that into
+    HTTP 422 so the client sees the raw output for debugging.
+    """
+    if not raw:
+        return None
+
+    text = raw.strip()
+    # Strip ```json ... ``` or ``` ... ``` fences if the whole body is wrapped.
+    fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL | re.IGNORECASE)
+    if fence:
+        text = fence.group(1).strip()
+
+    # Fast path: already a pure array.
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: find the first `[ ... ]` span and try to parse it.
+    match = re.search(r"\[.*\]", text, re.DOTALL)
+    if match:
+        try:
+            parsed = json.loads(match.group())
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
+def _validate_draft_rows(rows: list) -> list[dict]:
+    """Keep only rows that conform to the extract contract. Bad rows are
+    dropped silently — the LLM occasionally emits stub entries and we'd
+    rather show the user a clean preview than error-halt the whole flow."""
+    out: list[dict] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        issue_key = r.get("issue_key")
+        hours = r.get("time_spent_hours")
+        summary = r.get("summary")
+        if not isinstance(issue_key, str) or not issue_key.strip():
+            continue
+        if not isinstance(hours, (int, float)) or isinstance(hours, bool):
+            continue
+        if hours < 0:
+            continue
+        if not isinstance(summary, str):
+            continue
+        out.append({
+            "issue_key": issue_key.strip(),
+            "time_spent_hours": float(hours),
+            "summary": summary,
+        })
+    return out
 
 
 def _sse(payload: dict) -> str:

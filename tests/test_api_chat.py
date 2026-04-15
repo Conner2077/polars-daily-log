@@ -546,3 +546,304 @@ async def test_chat_combines_date_and_issue_anchors(app_client, monkeypatch):
     assert "Two days ago marker older." not in prompt
     assert "Chat UI" in prompt
     assert "Build the chat page" in prompt
+
+
+# ─── Phase 3: extract_worklog + push_to_jira ─────────────────────────
+
+
+async def _seed_session_with_messages(app_client, monkeypatch, messages: list[dict]) -> str:
+    """Helper — spin up a session with the given user/ai messages already
+    persisted via the chat endpoint. Returns the session id."""
+    sid = None
+    for m in messages:
+        if m["role"] != "user":
+            continue
+        fake = _FakeLLM(response=m.get("ai_reply", "ok"))
+        _patch_engine(monkeypatch, fake)
+        payload = {"messages": [{"role": "user", "text": m["text"]}]}
+        if sid is not None:
+            payload["session_id"] = sid
+        resp = await app_client.post("/api/chat", json=payload)
+        events = _parse_sse(resp.text)
+        if sid is None:
+            sid = events[0]["session_id"]
+    return sid
+
+
+@pytest.mark.asyncio
+async def test_extract_worklog_from_session(app_client, monkeypatch):
+    sid = await _seed_session_with_messages(app_client, monkeypatch, [
+        {"role": "user", "text": "今天我做了啥？", "ai_reply": "你写了 chat 的抽取端点。"},
+        {"role": "user", "text": "还修了 PDL-42 的 bug", "ai_reply": "好的记住了。"},
+    ])
+
+    canned = [
+        {"issue_key": "PDL-42", "time_spent_hours": 1.5, "summary": "Built the chat streaming endpoint"},
+        {"issue_key": "OTHER",   "time_spent_hours": 0.5, "summary": "Misc housekeeping"},
+    ]
+    extract_llm = _FakeLLM(response=json.dumps(canned, ensure_ascii=False))
+    _patch_engine(monkeypatch, extract_llm)
+
+    resp = await app_client.post(
+        f"/api/chat/sessions/{sid}/extract_worklog",
+        json={"target_date": "2026-04-15"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == canned
+    # Transcript really made it into the prompt
+    assert "[USER] 今天我做了啥？" in extract_llm.prompts[0]
+    assert "[AI] 你写了 chat 的抽取端点。" in extract_llm.prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_extract_worklog_strips_code_fences(app_client, monkeypatch):
+    sid = await _seed_session_with_messages(app_client, monkeypatch, [
+        {"role": "user", "text": "hi", "ai_reply": "hi back"},
+    ])
+
+    canned = [
+        {"issue_key": "PDL-1", "time_spent_hours": 2.0, "summary": "A"},
+    ]
+    fenced = "```json\n" + json.dumps(canned) + "\n```"
+    _patch_engine(monkeypatch, _FakeLLM(response=fenced))
+
+    resp = await app_client.post(
+        f"/api/chat/sessions/{sid}/extract_worklog", json={},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == canned
+
+
+@pytest.mark.asyncio
+async def test_extract_worklog_invalid_session_returns_404(app_client, monkeypatch):
+    _patch_engine(monkeypatch, _FakeLLM(response="[]"))
+    resp = await app_client.post(
+        "/api/chat/sessions/deadbeefdeadbeef/extract_worklog", json={},
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_extract_worklog_parse_failure_returns_422(app_client, monkeypatch):
+    sid = await _seed_session_with_messages(app_client, monkeypatch, [
+        {"role": "user", "text": "hi", "ai_reply": "hi"},
+    ])
+    _patch_engine(monkeypatch, _FakeLLM(response="not json at all"))
+
+    resp = await app_client.post(
+        f"/api/chat/sessions/{sid}/extract_worklog", json={},
+    )
+    assert resp.status_code == 422
+    body = resp.json()
+    # FastAPI wraps `detail` but our payload lives inside it.
+    assert body["detail"]["detail"] == "could not parse LLM output"
+    assert body["detail"]["raw"] == "not json at all"
+
+
+@pytest.mark.asyncio
+async def test_extract_worklog_drops_bad_rows(app_client, monkeypatch):
+    sid = await _seed_session_with_messages(app_client, monkeypatch, [
+        {"role": "user", "text": "hi", "ai_reply": "hi"},
+    ])
+    canned = [
+        {"issue_key": "PDL-1", "time_spent_hours": 1.0, "summary": "ok"},
+        {"issue_key": "",      "time_spent_hours": 1.0, "summary": "blank key"},
+        {"issue_key": "PDL-2", "time_spent_hours": -1,  "summary": "neg hours"},
+        {"issue_key": "PDL-3", "time_spent_hours": "x", "summary": "not a number"},
+        "not a dict",
+    ]
+    _patch_engine(monkeypatch, _FakeLLM(response=json.dumps(canned)))
+    resp = await app_client.post(
+        f"/api/chat/sessions/{sid}/extract_worklog", json={},
+    )
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+    assert rows[0]["issue_key"] == "PDL-1"
+
+
+# ─── push_to_jira ────────────────────────────────────────────────────
+
+
+class _FakeJira:
+    def __init__(self, responder=None):
+        # responder: callable(issue_key) -> dict (success) or raises
+        self.calls: list[dict] = []
+        self.responder = responder or (lambda issue_key: {"id": "WL-1"})
+
+    async def submit_worklog(self, issue_key: str, time_spent_sec: int, comment: str, started: str) -> dict:
+        self.calls.append({
+            "issue_key": issue_key,
+            "time_spent_sec": time_spent_sec,
+            "comment": comment,
+            "started": started,
+        })
+        return self.responder(issue_key)
+
+
+@pytest.mark.asyncio
+async def test_push_to_jira_persists_drafts_and_calls_client(app_client, monkeypatch):
+    sid = await _seed_session_with_messages(app_client, monkeypatch, [
+        {"role": "user", "text": "hi", "ai_reply": "hi"},
+    ])
+
+    fake_client = _FakeJira(responder=lambda _k: {"id": "WL-1"})
+
+    async def _fake_builder(_db):
+        return fake_client
+
+    monkeypatch.setattr(chat_module, "build_jira_client_from_db", _fake_builder, raising=False)
+    # Also patch at the source module so the `from ... import` inside the
+    # endpoint picks up the fake.
+    from auto_daily_log.jira_client import client as jira_client_module
+    monkeypatch.setattr(jira_client_module, "build_jira_client_from_db", _fake_builder)
+
+    resp = await app_client.post(
+        f"/api/chat/sessions/{sid}/push_to_jira",
+        json={
+            "target_date": "2026-04-15",
+            "drafts": [
+                {"issue_key": "PDL-42", "time_spent_hours": 1.5, "summary": "Did the work"},
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["submitted"] == [{"issue_key": "PDL-42", "worklog_id": "WL-1"}]
+    assert body["failed"] == []
+
+    # Fake client called once with the expected payload shape.
+    assert len(fake_client.calls) == 1
+    call = fake_client.calls[0]
+    assert call["issue_key"] == "PDL-42"
+    assert call["time_spent_sec"] == 5400  # 1.5h * 3600
+    assert call["comment"] == "Did the work"
+    assert call["started"] == "2026-04-15T21:00:00.000+0800"
+
+    # Row inserted into worklog_drafts for auditability.
+    db = app_client._transport.app.state.db
+    drafts = await db.fetch_all(
+        "SELECT date, issue_key, time_spent_sec, summary, status, tag "
+        "FROM worklog_drafts WHERE issue_key = 'PDL-42'",
+        (),
+    )
+    assert len(drafts) == 1
+    d = drafts[0]
+    assert d["date"] == "2026-04-15"
+    assert d["issue_key"] == "PDL-42"
+    assert d["time_spent_sec"] == 5400
+    assert d["summary"] == "Did the work"
+    assert d["status"] == "approved"
+    assert d["tag"] == "daily"
+
+
+@pytest.mark.asyncio
+async def test_push_to_jira_no_config_returns_400(app_client, monkeypatch):
+    sid = await _seed_session_with_messages(app_client, monkeypatch, [
+        {"role": "user", "text": "hi", "ai_reply": "hi"},
+    ])
+
+    from auto_daily_log.jira_client import client as jira_client_module
+
+    async def _raise(_db):
+        raise jira_client_module.MissingJiraConfig("Jira 未配置")
+
+    monkeypatch.setattr(jira_client_module, "build_jira_client_from_db", _raise)
+
+    resp = await app_client.post(
+        f"/api/chat/sessions/{sid}/push_to_jira",
+        json={
+            "target_date": "2026-04-15",
+            "drafts": [{"issue_key": "PDL-1", "time_spent_hours": 1, "summary": "x"}],
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Jira not configured"
+
+
+@pytest.mark.asyncio
+async def test_push_to_jira_partial_failure_returns_both(app_client, monkeypatch):
+    sid = await _seed_session_with_messages(app_client, monkeypatch, [
+        {"role": "user", "text": "hi", "ai_reply": "hi"},
+    ])
+
+    def _responder(issue_key: str):
+        if issue_key == "PDL-BAD":
+            raise RuntimeError("Jira 500 on PDL-BAD/worklog: boom")
+        return {"id": "WL-OK"}
+
+    fake_client = _FakeJira(responder=_responder)
+
+    async def _fake_builder(_db):
+        return fake_client
+
+    from auto_daily_log.jira_client import client as jira_client_module
+    monkeypatch.setattr(jira_client_module, "build_jira_client_from_db", _fake_builder)
+
+    resp = await app_client.post(
+        f"/api/chat/sessions/{sid}/push_to_jira",
+        json={
+            "target_date": "2026-04-15",
+            "drafts": [
+                {"issue_key": "PDL-GOOD", "time_spent_hours": 1.0, "summary": "ok"},
+                {"issue_key": "PDL-BAD",  "time_spent_hours": 2.0, "summary": "bad"},
+                {"issue_key": "OTHER",    "time_spent_hours": 0.5, "summary": "skipped"},
+                {"issue_key": "PDL-ZERO", "time_spent_hours": 0,   "summary": "skipped hours"},
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["submitted"] == [{"issue_key": "PDL-GOOD", "worklog_id": "WL-OK"}]
+    assert len(body["failed"]) == 1
+    assert body["failed"][0]["issue_key"] == "PDL-BAD"
+    assert "boom" in body["failed"][0]["error"]
+
+    # Only the two non-skipped rows made it into worklog_drafts.
+    db = app_client._transport.app.state.db
+    keys = await db.fetch_all(
+        "SELECT issue_key FROM worklog_drafts ORDER BY id", (),
+    )
+    assert [k["issue_key"] for k in keys] == ["PDL-GOOD", "PDL-BAD"]
+
+
+# ─── Phase 3 unit tests: _parse_json_array + _format_transcript ──────
+
+
+def test_parse_json_array_plain():
+    assert chat_module._parse_json_array('[{"a": 1}]') == [{"a": 1}]
+
+
+def test_parse_json_array_fenced():
+    fenced = "```json\n[{\"a\": 1}]\n```"
+    assert chat_module._parse_json_array(fenced) == [{"a": 1}]
+
+
+def test_parse_json_array_plain_fence():
+    fenced = "```\n[1, 2, 3]\n```"
+    assert chat_module._parse_json_array(fenced) == [1, 2, 3]
+
+
+def test_parse_json_array_with_chatter():
+    raw = "Here you go:\n[{\"a\": 1}]\nHope that helps!"
+    assert chat_module._parse_json_array(raw) == [{"a": 1}]
+
+
+def test_parse_json_array_returns_none_on_junk():
+    assert chat_module._parse_json_array("not json at all") is None
+
+
+def test_parse_json_array_returns_none_on_empty():
+    assert chat_module._parse_json_array("") is None
+
+
+def test_format_transcript_tags_roles():
+    out = chat_module._format_transcript([
+        {"role": "user", "text": "q1"},
+        {"role": "ai",   "text": "a1"},
+    ])
+    assert out == "[USER] q1\n[AI] a1"
+
+
+def test_format_transcript_empty():
+    assert chat_module._format_transcript([]) == ""
