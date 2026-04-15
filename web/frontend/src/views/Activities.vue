@@ -408,10 +408,10 @@ function formatDuration(sec) {
 function categoryType(cat) {
   const map = {
     coding: 'success', meeting: 'danger', communication: 'warning',
-    design: '', writing: 'info', research: '', reading: 'info',
-    browsing: '', other: 'info',
+    design: 'info', writing: 'info', research: 'info', reading: 'info',
+    browsing: 'info', other: 'info', idle: 'info',
   }
-  return map[cat] || ''
+  return map[cat] || 'info'
 }
 
 function getOcrText(row) {
