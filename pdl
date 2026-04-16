@@ -331,7 +331,71 @@ all_status() {
     fi
 }
 
-# ─── Install / clean ─────────────────────────────────────────────────
+# ─── MCP registration ────────────────────────────────────────────────
+_find_claude_cli() {
+    # Try common locations for the Claude Code CLI
+    for candidate in \
+        "claude" \
+        "$HOME/.claude/local/claude" \
+        "/usr/local/bin/claude" \
+        "$HOME/.local/bin/claude"; do
+        if command -v "$candidate" &>/dev/null 2>&1; then
+            echo "$candidate"
+            return 0
+        fi
+        if [[ -x "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+MCP_SERVER_NAME="polars-daily-log"
+
+mcp_install() {
+    local scope="${1:---scope user}"
+    local claude_cli
+    if ! claude_cli="$(_find_claude_cli)"; then
+        err "Claude Code CLI not found. Install it first:"
+        echo "  curl -fsSL https://claude.ai/install.sh | bash"
+        echo ""
+        echo "Or register manually by adding to ~/.claude/.mcp.json:"
+        echo "  {\"mcpServers\":{\"$MCP_SERVER_NAME\":{\"command\":\"$SCRIPT_DIR/pdl\",\"args\":[\"mcp\",\"start\"]}}}"
+        exit 1
+    fi
+
+    info "Registering MCP server '$MCP_SERVER_NAME' with Claude Code..."
+    if "$claude_cli" mcp add "$MCP_SERVER_NAME" $scope -- "$SCRIPT_DIR/pdl" mcp start; then
+        ok "MCP server registered ($scope)"
+        echo ""
+        echo "  Restart Claude Code to pick it up, then try:"
+        echo "    \"查一下我昨天的活动记录\""
+        echo "    \"帮我把今天的工时提交到 Jira\""
+        echo ""
+        echo "  To remove:  ./pdl mcp uninstall"
+    else
+        err "Registration failed. You can add manually to ~/.claude/.mcp.json:"
+        echo "  {\"mcpServers\":{\"$MCP_SERVER_NAME\":{\"command\":\"$SCRIPT_DIR/pdl\",\"args\":[\"mcp\",\"start\"]}}}"
+    fi
+}
+
+mcp_uninstall() {
+    local claude_cli
+    if ! claude_cli="$(_find_claude_cli)"; then
+        err "Claude Code CLI not found. Remove manually from ~/.claude/.mcp.json"
+        exit 1
+    fi
+
+    info "Removing MCP server '$MCP_SERVER_NAME'..."
+    if "$claude_cli" mcp remove "$MCP_SERVER_NAME" 2>/dev/null; then
+        ok "MCP server removed"
+    else
+        warn "Server not found or already removed"
+    fi
+}
+
+# ─── Install / clean ────────────────────────────────────────────────
 do_install() {
     bash "$SCRIPT_DIR/install.sh"
 }
@@ -446,7 +510,9 @@ ${BOLD}TOP-LEVEL${NC}
   install      run install.sh (first-time full setup)
   build        refresh deps + rebuild frontend (use after pull)
                options: --restart, --no-python, --no-frontend
-  mcp start    run MCP server (stdio transport, for Claude Code / OpenCode)
+  mcp install  register MCP server with Claude Code (auto-detects CLI)
+  mcp uninstall remove MCP server from Claude Code
+  mcp start    run MCP server (stdio transport, called by agent — not manual)
   query        query local data (activities/worklogs/commits/issues)
                ./pdl query activities --date 2026-04-16 --format json
                ./pdl query worklogs --issue PDL-42
@@ -508,7 +574,13 @@ main() {
                     activate_venv
                     exec python -m auto_daily_log.mcp_server
                     ;;
-                *) err "Unknown mcp action: $action (only 'start' supported)"; exit 2 ;;
+                install)
+                    mcp_install "$@"
+                    ;;
+                uninstall)
+                    mcp_uninstall
+                    ;;
+                *) err "Unknown mcp action: $action"; usage; exit 2 ;;
             esac
             ;;
         start)    all_start ;;

@@ -13,7 +13,6 @@ Bug fix + 功能增量，主要解决定时任务不触发的问题。
   - 移除语义模糊的"归档"
 - **MyLog 折叠卡片**："过去"模式下卡片默认折叠（header + 摘要预览），点击展开/收起。
 - **MyLog "今日/过去"过滤**：hover "过去"横向展开子选项（全部/每日/每周/每月/自定义），stagger 动画。选中后 tab 文字显示选中项。
-- **Chat 历史抽屉**：切换和删除历史会话。
 - **MCP Server**：`pdl mcp` 暴露 activities/worklogs/Jira 给外部 agent。
 - **`pdl query` CLI**：命令行直查数据（给脚本和 agent 用）。
 - **Scheduler 日志**：所有定时任务加 `[Scheduler]` 前缀日志（触发/完成/失败），方便排查。
