@@ -12,14 +12,13 @@ import sys
 from datetime import date
 from pathlib import Path
 
-
-DB_PATH = Path.home() / ".auto_daily_log" / "data.db"
+from .config import resolve_db_path
 
 
 async def _query(args: argparse.Namespace) -> list[dict]:
     from .models.database import Database
 
-    db = Database(args.db or DB_PATH, embedding_dimensions=4)
+    db = Database(resolve_db_path(args.db), embedding_dimensions=4)
     await db.initialize()
     try:
         return await _dispatch(db, args)
@@ -118,7 +117,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--all-issues", action="store_true", help="Include inactive issues")
     parser.add_argument("--limit", "-n", type=int, default=20, help="Max rows (default: 20)")
     parser.add_argument("--format", "-f", choices=["json", "table"], default="json", help="Output format")
-    parser.add_argument("--db", help="Override DB path (default: ~/.auto_daily_log/data.db)")
+    parser.add_argument("--db", help="Override DB path (default: from PDL_SERVER_CONFIG → system.data_dir, else ~/.auto_daily_log/data.db)")
 
     args = parser.parse_args(argv)
     if args.all_issues:

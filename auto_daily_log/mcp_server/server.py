@@ -1,7 +1,9 @@
 """MCP server implementation for Polars Daily Log.
 
 Uses the official ``mcp`` Python SDK (FastMCP) with stdio transport.
-Each tool opens its own Database connection to ``~/.auto_daily_log/data.db``.
+Each tool opens its own Database connection. The DB path is resolved
+from the server config (``PDL_SERVER_CONFIG`` → ``system.data_dir``),
+falling back to ``~/.auto_daily_log/data.db``.
 """
 
 from __future__ import annotations
@@ -13,16 +15,15 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from ..config import resolve_db_path
 from ..models.database import Database
 
 mcp = FastMCP("polars-daily-log")
 
-DB_PATH = Path.home() / ".auto_daily_log" / "data.db"
-
 
 async def _get_db(db_path: Optional[Path] = None) -> Database:
     """Open (and initialise) a Database connection."""
-    path = db_path or DB_PATH
+    path = db_path or resolve_db_path()
     db = Database(path, embedding_dimensions=4)
     await db.initialize()
     return db

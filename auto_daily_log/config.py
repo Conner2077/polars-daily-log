@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -123,3 +124,18 @@ def load_config(config_path: Optional[str]) -> AppConfig:
             data = yaml.safe_load(f) or {}
         return AppConfig(**data)
     return AppConfig()
+
+
+def resolve_db_path(override: Optional[str | Path] = None) -> Path:
+    """Resolve the SQLite DB path, honouring user-customised data_dir.
+
+    Resolution order:
+      1. Explicit ``override`` (e.g. ``--db`` flag)
+      2. ``system.data_dir`` from the YAML config pointed to by
+         ``PDL_SERVER_CONFIG`` env var
+      3. AppConfig defaults → ``~/.auto_daily_log/data.db``
+    """
+    if override:
+        return Path(override).expanduser()
+    cfg = load_config(os.environ.get("PDL_SERVER_CONFIG"))
+    return cfg.system.resolved_data_dir / "data.db"
