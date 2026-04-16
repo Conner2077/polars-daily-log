@@ -447,6 +447,11 @@ ${BOLD}TOP-LEVEL${NC}
   build        refresh deps + rebuild frontend (use after pull)
                options: --restart, --no-python, --no-frontend
   mcp start    run MCP server (stdio transport, for Claude Code / OpenCode)
+  query        query local data (activities/worklogs/commits/issues)
+               ./pdl query activities --date 2026-04-16 --format json
+               ./pdl query worklogs --issue PDL-42
+               ./pdl query commits --date 2026-04-16 --format table
+               ./pdl query issues --all-issues
   clean        remove pid / log files
   help         show this message
 
@@ -512,6 +517,10 @@ main() {
         status)   all_status ;;
         install)  do_install ;;
         build)    do_build "$@" ;;
+        query)
+            activate_venv
+            python -m auto_daily_log.cli_query "$@"
+            ;;
         clean)    do_clean ;;
         help|-h|--help) usage ;;
         *)
