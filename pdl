@@ -446,6 +446,7 @@ ${BOLD}TOP-LEVEL${NC}
   install      run install.sh (first-time full setup)
   build        refresh deps + rebuild frontend (use after pull)
                options: --restart, --no-python, --no-frontend
+  mcp start    run MCP server (stdio transport, for Claude Code / OpenCode)
   clean        remove pid / log files
   help         show this message
 
@@ -493,6 +494,16 @@ main() {
                 logs)      collector_logs "${1:-50}" ;;
                 uninstall) collector_uninstall ;;
                 *)         err "Unknown collector action: $action"; exit 2 ;;
+            esac
+            ;;
+        mcp)
+            local action="${1:-start}"; shift || true
+            case "$action" in
+                start)
+                    activate_venv
+                    exec python -m auto_daily_log.mcp_server
+                    ;;
+                *) err "Unknown mcp action: $action (only 'start' supported)"; exit 2 ;;
             esac
             ;;
         start)    all_start ;;
