@@ -74,7 +74,49 @@ class TestCheckLLMEndpoint:
         await db.close()
 
     @pytest.mark.asyncio
-    async def test_check_llm_rejects_unknown_protocol(self, tmp_path):
+    async def test_check_llm_accepts_anthropic_and_enables_streaming(self, tmp_path):
+        from auto_daily_log.models.database import Database
+        from auto_daily_log.web.app import create_app
+        from fastapi.testclient import TestClient
+        from unittest.mock import patch
+
+        db = Database(tmp_path / "t.db", embedding_dimensions=128)
+        await db.initialize()
+        app = create_app(db)
+        client = TestClient(app)
+
+        captured = {}
+
+        async def fake_post(self, url, json=None, headers=None, **kwargs):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            class R:
+                status_code = 200
+                text = "ok"
+                def json(self_): return {"content": [{"text": "hi"}]}
+            return R()
+
+        with patch("httpx.AsyncClient.post", new=fake_post):
+            r = client.post("/api/settings/check-llm", json={
+                "engine": "anthropic",
+                "api_key": "sk-test",
+                "model": "claude-sonnet-4-20250514",
+                "base_url": "https://api.anthropic.com/v1/messages",
+            })
+            assert r.status_code == 200
+            assert r.json()["valid"] is True
+            assert captured["url"] == "https://api.anthropic.com/v1/messages"
+            assert captured["json"] == {
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 1,
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+            assert captured["headers"]["Accept"] == "text/event-stream"
+
+        await db.close()
+
         from auto_daily_log.models.database import Database
         from auto_daily_log.web.app import create_app
         from fastapi.testclient import TestClient

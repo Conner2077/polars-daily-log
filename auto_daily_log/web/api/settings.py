@@ -164,8 +164,8 @@ async def check_llm_key(body: LLMCheckRequest):
             if protocol == "anthropic":
                 resp = await client.post(
                     f"{base_url}/v1/messages",
-                    headers={"x-api-key": body.api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-                    json={"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]},
+                    headers={"x-api-key": body.api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json", "Accept": "text/event-stream"},
+                    json={"model": model, "max_tokens": 1, "stream": True, "messages": [{"role": "user", "content": "hi"}]},
                 )
             else:
                 # openai_compat
