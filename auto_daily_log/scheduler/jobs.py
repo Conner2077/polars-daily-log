@@ -110,33 +110,57 @@ class DailyWorkflow:
                     continue
 
                 _SKIP_KEYS = {"OTHER", "ALL", "DAILY"}
-                results = []
                 for i, issue in enumerate(issues):
                     if issue.get("jira_worklog_id"):
                         continue
                     if issue["issue_key"] in _SKIP_KEYS:
                         continue
-                    time_sec = int(issue["time_spent_hours"] * 3600)
-                    result = await jira.submit_worklog(
-                        issue_key=issue["issue_key"],
-                        time_spent_sec=time_sec,
-                        comment=issue["summary"],
-                        started=started,
-                    )
-                    issues[i]["jira_worklog_id"] = str(result.get("id", ""))
-                    results.append(result)
+                    try:
+                        time_sec = int(issue["time_spent_hours"] * 3600)
+                        result = await jira.submit_worklog(
+                            issue_key=issue["issue_key"],
+                            time_spent_sec=time_sec,
+                            comment=issue["summary"],
+                            started=started,
+                        )
+                        issues[i]["jira_worklog_id"] = str(result.get("id", ""))
+                        # One audit row per issue. Mirrors the manual paths so
+                        # the timeline UI can just sort by created_at and render
+                        # uniformly, regardless of who triggered the submit.
+                        await self._db.execute(
+                            "INSERT INTO audit_logs (draft_id, action, jira_response, issue_index, issue_key, source) "
+                            "VALUES (?, 'submitted_issue', ?, ?, ?, 'auto')",
+                            (draft["id"],
+                             json.dumps({"issue_key": issue["issue_key"], "result": result}, ensure_ascii=False),
+                             i, issue["issue_key"]),
+                        )
+                    except Exception as issue_exc:
+                        # Per-issue failure: record it and keep going so other
+                        # issues in the same draft still get attempted.
+                        await self._db.execute(
+                            "INSERT INTO audit_logs (draft_id, action, jira_response, issue_index, issue_key, source) "
+                            "VALUES (?, 'submit_failed_issue', ?, ?, ?, 'auto')",
+                            (draft["id"],
+                             json.dumps({"issue_key": issue["issue_key"], "error": str(issue_exc)}, ensure_ascii=False),
+                             i, issue["issue_key"]),
+                        )
 
-                await self._db.execute(
-                    "UPDATE worklog_drafts SET summary = ?, status = 'submitted', updated_at = datetime('now') WHERE id = ?",
-                    (json.dumps(issues, ensure_ascii=False), draft["id"]),
+                # Mark the draft as submitted only if every non-skipped issue
+                # actually got a worklog id — otherwise leave it for retry.
+                all_done = all(
+                    iss.get("jira_worklog_id") or iss["issue_key"] in _SKIP_KEYS
+                    for iss in issues
                 )
+                new_status = "submitted" if all_done else draft["status"]
                 await self._db.execute(
-                    "INSERT INTO audit_logs (draft_id, action, jira_response) VALUES (?, 'submitted', ?)",
-                    (draft["id"], json.dumps(results, ensure_ascii=False)),
+                    "UPDATE worklog_drafts SET summary = ?, status = ?, updated_at = datetime('now') WHERE id = ?",
+                    (json.dumps(issues, ensure_ascii=False), new_status, draft["id"]),
                 )
             except Exception as e:
+                # Draft-level failure (e.g. invalid summary JSON) — keep the
+                # legacy draft-scoped audit row for visibility.
                 await self._db.execute(
-                    "INSERT INTO audit_logs (draft_id, action, after_snapshot) VALUES (?, 'submit_failed', ?)",
+                    "INSERT INTO audit_logs (draft_id, action, after_snapshot, source) VALUES (?, 'submit_failed', ?, 'auto')",
                     (draft["id"], str(e)),
                 )
 

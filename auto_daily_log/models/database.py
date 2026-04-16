@@ -75,6 +75,9 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     before_snapshot TEXT,
     after_snapshot TEXT,
     jira_response TEXT,
+    issue_index INTEGER,           -- which issue within the draft (NULL = draft-level)
+    issue_key TEXT,                -- denormalised for fast filtering / display
+    source TEXT,                   -- "manual_single" | "manual_all" | "auto" | NULL (legacy)
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -209,6 +212,18 @@ class Database:
             await self._conn.execute("ALTER TABLE collectors ADD COLUMN config_override TEXT")
         if "is_paused" not in col_col_names:
             await self._conn.execute("ALTER TABLE collectors ADD COLUMN is_paused INTEGER DEFAULT 0")
+
+        # audit_logs: per-issue granularity for submit actions.
+        # Legacy rows (action='submitted' with batch jira_response) keep
+        # NULL in these columns and render as "全部提交" in the UI.
+        audit_cols = await self.fetch_all("PRAGMA table_info(audit_logs)")
+        audit_col_names = {c["name"] for c in audit_cols}
+        if "issue_index" not in audit_col_names:
+            await self._conn.execute("ALTER TABLE audit_logs ADD COLUMN issue_index INTEGER")
+        if "issue_key" not in audit_col_names:
+            await self._conn.execute("ALTER TABLE audit_logs ADD COLUMN issue_key TEXT")
+        if "source" not in audit_col_names:
+            await self._conn.execute("ALTER TABLE audit_logs ADD COLUMN source TEXT")
 
         # Normalize legacy llm_engine values to canonical protocols
         await self._conn.execute(

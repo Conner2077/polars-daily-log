@@ -423,10 +423,17 @@ async def test_full_lifecycle(env):
     has_worklog_id = any(i.get("jira_worklog_id") for i in submitted_issues)
     assert has_worklog_id == True
 
-    # Verify audit trail includes submission
+    # Verify audit trail records ONE submitted_issue row per submitted issue.
+    # Older releases wrote a single batch 'submitted' row; the new contract is
+    # "one row per issue" so manual + auto submissions look uniform in the UI.
     r = await http.get(f"/api/worklogs/{draft_id_2}/audit")
-    actions = [a["action"] for a in r.json()]
-    assert "submitted" in actions
+    audit_rows = r.json()
+    submit_rows = [a for a in audit_rows if a["action"] == "submitted_issue"]
+    submitted_issue_keys = [iss["issue_key"] for iss in submitted_issues if iss.get("jira_worklog_id")]
+    assert len(submit_rows) == len(submitted_issue_keys)
+    assert {a["issue_key"] for a in submit_rows} == set(submitted_issue_keys)
+    # Source tag distinguishes manual vs auto
+    assert all(a["source"] == "manual_all" for a in submit_rows)
 
     # Dashboard should show submitted hours
     r = await http.get("/api/dashboard", params={"target_date": TODAY})

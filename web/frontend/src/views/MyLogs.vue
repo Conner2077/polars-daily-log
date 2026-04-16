@@ -310,9 +310,16 @@
 
     <el-dialog v-model="auditVisible" title="审计记录" width="600px">
       <el-timeline>
-        <el-timeline-item v-for="log in auditLogs" :key="log.id" :timestamp="log.created_at">
-          <strong>{{ log.action }}</strong>
+        <el-timeline-item v-for="log in auditLogs" :key="log.id" :timestamp="fmtAuditTime(log.created_at)">
+          <div class="audit-row-head">
+            <strong>{{ auditActionLabel(log.action) }}</strong>
+            <span v-if="log.issue_key" class="audit-issue-key">{{ log.issue_key }}</span>
+            <span v-if="log.source" class="audit-source-tag" :class="`audit-source-${log.source}`">
+              {{ auditSourceLabel(log.source) }}
+            </span>
+          </div>
           <pre v-if="log.after_snapshot" class="audit-snapshot">{{ log.after_snapshot }}</pre>
+          <pre v-if="log.jira_response" class="audit-snapshot">{{ formatJiraResponse(log.jira_response) }}</pre>
         </el-timeline-item>
       </el-timeline>
     </el-dialog>
@@ -718,6 +725,79 @@ async function showAudit(id) {
   const res = await api.getAuditTrail(id)
   auditLogs.value = res.data
   auditVisible.value = true
+}
+
+function fmtAuditTime(s) {
+  // SQLite datetime('now') returns UTC without a tz marker; treat as UTC.
+  if (!s) return ''
+  const iso = s.includes('T') ? s : s.replace(' ', 'T') + 'Z'
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return s
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+const AUDIT_ACTION_LABELS = {
+  created: '创建',
+  edited: '编辑',
+  edited_issue: '编辑单条',
+  approved: '通过',
+  auto_approved: '自动审批',
+  auto_skipped: '自动跳过',
+  rejected: '驳回',
+  submitted: '已提交 Jira（旧版批量记录）',
+  submitted_issue: '提交到 Jira',
+  submit_failed: '提交失败',
+  submit_failed_issue: '单条提交失败',
+  deleted: '删除',
+}
+
+const AUDIT_SOURCE_LABELS = {
+  manual_single: '手动·单条',
+  manual_all: '手动·全部',
+  auto: '自动',
+}
+
+function auditActionLabel(action) {
+  return AUDIT_ACTION_LABELS[action] || action
+}
+
+function auditSourceLabel(source) {
+  return AUDIT_SOURCE_LABELS[source] || source
+}
+
+function formatJiraResponse(raw) {
+  // Friendly one-line view; must handle three shapes:
+  //   (a) new per-issue: {issue_key, result: {id, ...}}   (post-fix)
+  //   (b) new per-issue array with {issue_key, jira_worklog_id}   (manual-all)
+  //   (c) legacy batch: raw Jira response array with {id, issueId, self, ...}
+  //       — issue_key isn't stored, so derive from `self` URL if possible.
+  try {
+    const obj = typeof raw === 'string' ? JSON.parse(raw) : raw
+
+    const renderOne = (r) => {
+      if (!r) return ''
+      if (r.error) return `✗ ${r.issue_key || ''}: ${r.error}`
+      // Shape (c): raw Jira response — has `id` + `self` URL
+      if (r.self && !r.issue_key && !r.result) {
+        const worklogId = r.id || '?'
+        const time = r.timeSpent || `${r.timeSpentSeconds || 0}s`
+        return `✓ worklog ${worklogId}（${time}）[旧版批量记录，issue key 未存]`
+      }
+      // Shape (a) wrapped
+      if (r.result) {
+        const id = r.result.id || '?'
+        return `✓ ${r.issue_key || ''} → worklog ${id}`
+      }
+      // Shape (b) flat
+      return `✓ ${r.issue_key || ''} → worklog ${r.jira_worklog_id || '?'}`
+    }
+
+    if (Array.isArray(obj)) return obj.map(renderOne).join('\n')
+    return renderOne(obj)
+  } catch {
+    return String(raw)
+  }
 }
 
 onMounted(() => { loadJiraContext(); loadDrafts() })
@@ -1237,6 +1317,39 @@ onMounted(() => { loadJiraContext(); loadDrafts() })
   max-height: 200px;
   overflow: auto;
   margin-top: 6px;
+}
+.audit-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.audit-issue-key {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #1677ff;
+  padding: 1px 6px;
+  background: #eaf4ff;
+  border-radius: 4px;
+}
+.audit-source-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #f0f0f0;
+  color: #666;
+}
+.audit-source-auto {
+  background: #fff7e6;
+  color: #ad6800;
+}
+.audit-source-manual_single {
+  background: #e6f7ff;
+  color: #0958d9;
+}
+.audit-source-manual_all {
+  background: #e6f4ff;
+  color: #0958d9;
 }
 
 /* ───── Generating overlay ───── */
