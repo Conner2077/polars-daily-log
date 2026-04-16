@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from typing import Any, Optional
 
@@ -126,6 +127,7 @@ class Database:
         self._db_path = str(db_path)
         self._conn: Optional[aiosqlite.Connection] = None
         self._embedding_dimensions = embedding_dimensions
+        self._write_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         self._conn = await aiosqlite.connect(self._db_path)
@@ -240,13 +242,29 @@ class Database:
             await self._conn.close()
 
     async def execute(self, sql: str, params: tuple = ()) -> int:
-        cursor = await self._conn.execute(sql, params)
-        await self._conn.commit()
-        return cursor.lastrowid
+        async with self._write_lock:
+            cursor = await self._conn.execute(sql, params)
+            await self._conn.commit()
+            return cursor.lastrowid
 
     async def execute_many(self, sql: str, params_list: list[tuple]) -> None:
-        await self._conn.executemany(sql, params_list)
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.executemany(sql, params_list)
+            await self._conn.commit()
+
+    async def execute_many_returning_ids(self, sql: str, params_list: list[tuple]) -> list[int]:
+        row_ids: list[int] = []
+        async with self._write_lock:
+            await self._conn.execute("BEGIN")
+            try:
+                for params in params_list:
+                    cursor = await self._conn.execute(sql, params)
+                    row_ids.append(cursor.lastrowid)
+                await self._conn.commit()
+            except Exception:
+                await self._conn.rollback()
+                raise
+        return row_ids
 
     async def fetch_one(self, sql: str, params: tuple = ()) -> Optional[dict]:
         cursor = await self._conn.execute(sql, params)

@@ -90,6 +90,7 @@ class ActivityIngestResponse(BaseModel):
     rejected: int = 0
     first_id: Optional[int] = None
     last_id: Optional[int] = None
+    row_ids: list[int] = Field(default_factory=list)
 
 
 # ─── Git commit ingestion ────────────────────────────────────────────

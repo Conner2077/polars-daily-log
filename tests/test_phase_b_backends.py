@@ -365,6 +365,79 @@ async def test_http_backend_posts_with_auth_header(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_http_backend_falls_back_to_contiguous_range_when_row_ids_missing(tmp_path):
+    backend = HTTPBackend(
+        server_url="http://server.test:8080",
+        token="my-secret-token-with-32-chars!!",
+        queue_dir=tmp_path,
+    )
+
+    async def fake_post(self, url, json=None, headers=None):
+        class FakeResp:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "accepted": len(json["activities"]),
+                    "first_id": 20,
+                    "last_id": 22,
+                }
+
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.post", new=fake_post):
+        activities = [
+            ActivityPayload(timestamp="2026-04-14T10:00:00", app_name="A", duration_sec=15),
+            ActivityPayload(timestamp="2026-04-14T10:00:15", app_name="B", duration_sec=15),
+            ActivityPayload(timestamp="2026-04-14T10:00:30", app_name="C", duration_sec=15),
+        ]
+        ids = await backend.save_activities("mac-1", activities)
+
+    assert ids == [20, 21, 22]
+    await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_http_backend_prefers_explicit_row_ids_over_contiguous_range(tmp_path):
+    backend = HTTPBackend(
+        server_url="http://server.test:8080",
+        token="my-secret-token-with-32-chars!!",
+        queue_dir=tmp_path,
+    )
+
+    async def fake_post(self, url, json=None, headers=None):
+        class FakeResp:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "accepted": len(json["activities"]),
+                    "first_id": 10,
+                    "last_id": 13,
+                    "row_ids": [10, 12, 13],
+                }
+
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.post", new=fake_post):
+        activities = [
+            ActivityPayload(timestamp="2026-04-14T10:00:00", app_name="A", duration_sec=15),
+            ActivityPayload(timestamp="2026-04-14T10:00:15", app_name="B", duration_sec=15),
+            ActivityPayload(timestamp="2026-04-14T10:00:30", app_name="C", duration_sec=15),
+        ]
+        ids = await backend.save_activities("mac-1", activities)
+
+    assert ids == [10, 12, 13]
+    await backend.close()
+
+
+@pytest.mark.asyncio
 async def test_http_backend_drains_queue_on_success(tmp_path):
     """When server comes back online, queued items should be sent."""
     backend = HTTPBackend(

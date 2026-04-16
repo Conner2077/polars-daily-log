@@ -154,6 +154,9 @@ class HTTPBackend(StorageBackend):
         data = r.json()
         if kind == "commits":
             return int(data.get("accepted", 0))
+        row_ids = data.get("row_ids")
+        if isinstance(row_ids, list):
+            return [int(row_id) for row_id in row_ids]
         first = data.get("first_id")
         last = data.get("last_id")
         if first is not None and last is not None:

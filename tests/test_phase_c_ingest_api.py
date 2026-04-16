@@ -1,5 +1,6 @@
 """Phase C tests — Ingestion API + auth."""
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -153,11 +154,14 @@ async def test_ingest_activities_batch_persists_with_machine_id(tmp_path):
         assert data["rejected"] == 0
         assert data["first_id"] is not None
         assert data["last_id"] == data["first_id"] + 1
+        assert data["row_ids"] == [data["first_id"], data["last_id"]]
 
         rows = await db.fetch_all(
             "SELECT * FROM activities WHERE machine_id = ? ORDER BY id", (machine_id,)
         )
         assert len(rows) == 2
+        assert rows[0]["id"] == data["row_ids"][0]
+        assert rows[1]["id"] == data["row_ids"][1]
         assert rows[0]["app_name"] == "Xcode"
         assert rows[0]["window_title"] == "MainView.swift"
         assert rows[0]["category"] == "coding"
@@ -166,6 +170,42 @@ async def test_ingest_activities_batch_persists_with_machine_id(tmp_path):
         assert rows[0]["timestamp"] == "2026-04-14T10:00:00"
         assert rows[1]["app_name"] == "Slack"
         assert rows[1]["duration_sec"] == 45
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_ingest_activities_returns_non_contiguous_row_ids_from_database(tmp_path):
+    client, db = await _setup(tmp_path)
+    try:
+        reg = client.post("/api/collectors/register", json=REGISTER_PAYLOAD).json()
+        headers = {
+            "Authorization": f"Bearer {reg['token']}",
+            "X-Machine-ID": reg["machine_id"],
+        }
+        db.execute_many_returning_ids = AsyncMock(return_value=[10, 12, 13])
+
+        r = client.post(
+            "/api/ingest/activities",
+            json={
+                "activities": [
+                    {"timestamp": "2026-04-14T10:00:00", "app_name": "A", "duration_sec": 15},
+                    {"timestamp": "2026-04-14T10:00:15", "app_name": "B", "duration_sec": 15},
+                    {"timestamp": "2026-04-14T10:00:30", "app_name": "C", "duration_sec": 15},
+                ]
+            },
+            headers=headers,
+        )
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data == {
+            "accepted": 3,
+            "rejected": 0,
+            "first_id": 10,
+            "last_id": 13,
+            "row_ids": [10, 12, 13],
+        }
+        db.execute_many_returning_ids.assert_awaited_once()
     finally:
         await db.close()
 

@@ -1,11 +1,17 @@
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-import imagehash
-from PIL import Image
+try:
+    import imagehash
+    from PIL import Image
+except Exception:  # Optional dependency path for non-screenshot tests/runtime
+    imagehash = None
+    Image = None
 
 
-def compute_phash(image_path: Path) -> Optional[imagehash.ImageHash]:
+def compute_phash(image_path: Path) -> Optional[Any]:
+    if imagehash is None or Image is None:
+        return None
     try:
         img = Image.open(image_path)
         return imagehash.phash(img)
@@ -14,8 +20,8 @@ def compute_phash(image_path: Path) -> Optional[imagehash.ImageHash]:
 
 
 def is_similar(
-    hash_a: Optional[imagehash.ImageHash],
-    hash_b: Optional[imagehash.ImageHash],
+    hash_a: Optional[Any],
+    hash_b: Optional[Any],
     threshold: int = 10,
 ) -> bool:
     if hash_a is None or hash_b is None:

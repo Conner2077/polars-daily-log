@@ -177,27 +177,35 @@ async def ingest_activities(
 ):
     db = request.app.state.db
     machine_id = collector["machine_id"]
-    first_id: Optional[int] = None
-    last_id: Optional[int] = None
-
-    for a in body.activities:
-        row_id = await db.execute(
-            """INSERT INTO activities
-               (timestamp, app_name, window_title, category, confidence,
-                url, signals, duration_sec, machine_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (a.timestamp, a.app_name, a.window_title, a.category, a.confidence,
-             a.url, a.signals, a.duration_sec, machine_id),
-        )
-        if first_id is None:
-            first_id = row_id
-        last_id = row_id
+    row_ids = await db.execute_many_returning_ids(
+        """INSERT INTO activities
+           (timestamp, app_name, window_title, category, confidence,
+            url, signals, duration_sec, machine_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        [
+            (
+                a.timestamp,
+                a.app_name,
+                a.window_title,
+                a.category,
+                a.confidence,
+                a.url,
+                a.signals,
+                a.duration_sec,
+                machine_id,
+            )
+            for a in body.activities
+        ],
+    )
+    first_id = row_ids[0] if row_ids else None
+    last_id = row_ids[-1] if row_ids else None
 
     return ActivityIngestResponse(
         accepted=len(body.activities),
         rejected=0,
         first_id=first_id,
         last_id=last_id,
+        row_ids=row_ids,
     )
 
 
