@@ -15,6 +15,7 @@ client can pin it to localStorage before any text chunk arrives.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import uuid
@@ -31,6 +32,12 @@ from .chat_retrieval import extract_issue_keys, parse_date_anchors
 from .worklogs import _get_llm_engine_from_settings
 
 router = APIRouter(tags=["chat"])
+
+
+# Strong refs to in-flight producer tasks so they survive client
+# disconnects (refresh, network drop). Without this, Python's GC can
+# reap the coroutine mid-run. Entries self-remove via done-callback.
+_bg_tasks: set = set()
 
 
 # Tight defaults keep the prefill small — any LLM/provider answers faster
@@ -150,37 +157,63 @@ async def chat(body: ChatRequest, request: Request):
 
     llm = await _get_llm_engine_from_settings(db)
 
-    async def gen() -> AsyncGenerator[str, None]:
-        # Always advertise the session id first — clients rely on this to
-        # pin a fresh session to localStorage before any text arrives.
-        if is_new_session:
-            yield _sse({"session_id": session_id})
+    # Producer runs the LLM + persist pipeline as a DETACHED task, so a
+    # mid-stream client disconnect (refresh, nav-away, abort button) does
+    # NOT cancel the LLM call or lose the AI reply. The task writes into
+    # an asyncio.Queue; the HTTP response tails it for live streaming.
+    # If the client drops, the queue just backs up in memory (LLM replies
+    # are at most a few KB) while the task finishes and persists to DB.
+    queue: asyncio.Queue = asyncio.Queue()
+    SENTINEL_DONE = object()
 
+    async def producer() -> None:
         assembled_parts: list[str] = []
         errored = False
         try:
             async for chunk in llm.generate_stream(prompt):
                 if chunk:
                     assembled_parts.append(chunk)
-                    yield _sse({"text": chunk})
+                    await queue.put(("text", chunk))
         except Exception as exc:
             errored = True
-            yield _sse({"error": f"LLM call failed: {exc}"})
+            await queue.put(("error", f"LLM call failed: {exc}"))
 
         if not errored:
             assembled = "".join(assembled_parts)
-            # Only persist a non-empty AI message. Empty responses are
-            # effectively a silent no-op — no bubble to retry on.
+            # Persist regardless of whether the client is still listening.
+            # A non-empty AI message becomes a real row; the updated_at
+            # touch keeps the session list in chronological order.
             if assembled:
                 await db.execute(
                     "INSERT INTO chat_messages (session_id, role, text) VALUES (?, 'ai', ?)",
                     (session_id, assembled),
                 )
-            # Touch updated_at so the session list stays sorted correctly.
             await db.execute(
                 "UPDATE chat_sessions SET updated_at = datetime('now') WHERE id = ?",
                 (session_id,),
             )
+
+        await queue.put(SENTINEL_DONE)
+
+    task = asyncio.create_task(producer())
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+    async def gen() -> AsyncGenerator[str, None]:
+        # Announce the session id up-front so the client can pin it before
+        # any text arrives and before it needs to reconcile on reload.
+        if is_new_session:
+            yield _sse({"session_id": session_id})
+
+        while True:
+            item = await queue.get()
+            if item is SENTINEL_DONE:
+                break
+            kind, data = item
+            if kind == "text":
+                yield _sse({"text": data})
+            elif kind == "error":
+                yield _sse({"error": data})
 
         yield _sse_done()
 

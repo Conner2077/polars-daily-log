@@ -191,8 +191,6 @@
 import { ref, nextTick, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 
-const SESSION_STORAGE_KEY = 'pdl_chat_session_id'
-
 const history = ref([])    // [{role:'user'|'ai', text, error?}]
 const draft = ref('')
 const busy = ref(false)
@@ -418,7 +416,6 @@ function sendFromBox() {
 
 function resetChat() {
   if (busy.value) return
-  localStorage.removeItem(SESSION_STORAGE_KEY)
   sessionId.value = null
   sessionTitle.value = ''
   history.value = []
@@ -607,12 +604,10 @@ async function ask(text) {
         try {
           const evt = JSON.parse(payload)
           if (evt.session_id !== undefined) {
-            // Control event — pin the fresh session id to localStorage
-            // so a reload picks up right where we left off.
+            // Control event from server — pick up the id so subsequent
+            // POSTs in this conversation carry it. No localStorage needed;
+            // on next page load we fetch the latest session from the DB.
             sessionId.value = evt.session_id
-            try { localStorage.setItem(SESSION_STORAGE_KEY, evt.session_id) } catch (_) {}
-            // Pull the title (first-user-message-derived) so exports
-            // can use it instead of the generic "对话" fallback.
             loadSessionTitle(evt.session_id)
           } else if (evt.text !== undefined) {
             if (aiIdx < 0) {
@@ -651,24 +646,25 @@ async function ask(text) {
 }
 
 async function restoreSession() {
-  let saved = null
-  try { saved = localStorage.getItem(SESSION_STORAGE_KEY) } catch (_) { return }
-  if (!saved) return
+  // Load the most recent session from the server. No localStorage needed —
+  // the DB is the single source of truth per AGENTS.md's data principles.
   try {
-    const resp = await fetch(`/api/chat/sessions/${encodeURIComponent(saved)}/messages`)
-    if (resp.status === 404) {
-      localStorage.removeItem(SESSION_STORAGE_KEY)
-      return
-    }
-    if (!resp.ok) return  // transient error — leave id alone, user can retry by sending
-    const rows = await resp.json()
-    sessionId.value = saved
-    // Map {role, text} only; drop created_at so the history shape stays
-    // identical to freshly-sent messages.
+    const listResp = await fetch('/api/chat/sessions')
+    if (!listResp.ok) return
+    const sessions = await listResp.json()
+    if (!Array.isArray(sessions) || sessions.length === 0) return
+
+    const latest = sessions[0]  // sorted by updated_at DESC on the server
+    const msgsResp = await fetch(`/api/chat/sessions/${encodeURIComponent(latest.id)}/messages`)
+    if (!msgsResp.ok) return
+    const rows = await msgsResp.json()
+    if (!rows.length) return
+
+    sessionId.value = latest.id
     history.value = rows.map(r => ({ role: r.role, text: r.text }))
     scrollToBottom()
   } catch (_) {
-    // Network error on boot — don't wipe the id, just skip restoration.
+    // Network error on boot — skip restoration, user starts fresh.
   }
 }
 

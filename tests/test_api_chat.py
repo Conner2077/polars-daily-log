@@ -907,6 +907,61 @@ async def test_suggestions_surfaces_mentioned_issue_key(app_client):
 
 
 @pytest.mark.asyncio
+async def test_ai_reply_persists_even_when_client_disconnects_mid_stream(app_client, monkeypatch):
+    """Mid-stream client disconnect must NOT lose the AI reply.
+
+    Producer runs detached; the queue sits in memory until the LLM
+    finishes and the row is written. Simulate a disconnect by bailing
+    out of the response body after the first chunk and then waiting
+    for the background task to catch up.
+    """
+    import asyncio
+
+    # Slow-stream fake so we can "disconnect" between chunks.
+    class _SlowLLM:
+        async def generate_stream(self, prompt: str):
+            for part in ["Hel", "lo ", "world"]:
+                await asyncio.sleep(0.01)
+                yield part
+        async def generate(self, prompt: str):
+            return "Hello world"
+    _patch_engine(monkeypatch, _SlowLLM())
+
+    # Start a session + grab the id.
+    async with app_client.stream("POST", "/api/chat", json={
+        "messages": [{"role": "user", "text": "首问"}],
+    }) as resp:
+        assert resp.status_code == 200
+        # Read one event, then bail out early (simulates the browser refresh).
+        got_session_id = None
+        async for line in resp.aiter_lines():
+            if line.startswith("data: "):
+                payload = line[6:].strip()
+                if payload and payload != "[DONE]":
+                    evt = json.loads(payload)
+                    if "session_id" in evt:
+                        got_session_id = evt["session_id"]
+                        break
+        # Leaving the context manager here simulates the client dropping.
+    assert got_session_id is not None
+
+    # Give the detached producer time to finish the LLM call + DB write.
+    for _ in range(40):  # up to 2s, plenty for the 3-chunk fake
+        msgs = await app_client.get(f"/api/chat/sessions/{got_session_id}/messages")
+        rows = msgs.json()
+        if len(rows) == 2 and rows[1]["role"] == "ai":
+            break
+        await asyncio.sleep(0.05)
+
+    # The AI reply should be the full assembled text, not a truncation.
+    assert len(rows) == 2
+    assert rows[0]["role"] == "user"
+    assert rows[0]["text"] == "首问"
+    assert rows[1]["role"] == "ai"
+    assert rows[1]["text"] == "Hello world"
+
+
+@pytest.mark.asyncio
 async def test_suggestions_caps_at_five_chips(app_client):
     db = app_client._transport.app.state.db
     # 3 active issues all mentioned in recent activities: triggers chip (1)

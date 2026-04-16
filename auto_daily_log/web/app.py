@@ -1,4 +1,5 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
+from starlette.responses import FileResponse
 from ..models.database import Database
 from .api import settings, issues, activities, worklogs, dashboard, git_repos, search, ingest, feedback, chat, machines
 
@@ -25,6 +26,22 @@ def create_app(db: Database) -> FastAPI:
     ]
     for p in candidates:
         if p.exists() and (p / "index.html").exists():
-            app.mount("/", StaticFiles(directory=str(p), html=True), name="frontend")
+            _dist_dir = p
+
+            # index.html must NEVER be cached — it's the entry point that
+            # references hashed chunk filenames. If the browser caches a
+            # stale index.html, it loads old JS even after a new build.
+            # Hashed assets (*.js, *.css) are fine to cache forever because
+            # their filenames change on every build.
+            @app.middleware("http")
+            async def _no_cache_index(request: Request, call_next):
+                response = await call_next(request)
+                path = request.url.path
+                if path == "/" or path.endswith(".html"):
+                    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                    response.headers["Pragma"] = "no-cache"
+                return response
+
+            app.mount("/", StaticFiles(directory=str(_dist_dir), html=True), name="frontend")
             break
     return app
