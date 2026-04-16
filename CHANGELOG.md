@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.0] — 2026-04-16
+
+Chat Agent + E2E 测试覆盖。新增基于 LLM 的对话式日志助手，可以查询活动、生成工时、推送 Jira，全部通过自然语言完成。
+
+### Added
+- **Chat Agent**：侧边栏新增 Chat 入口，支持与 LLM 对话查询日志数据
+  - **Phase 1**：会话持久化（DB 存储） + 中止/重试 + SSE 流式输出
+  - **Phase 2**：智能检索 — 日期 NER（"昨天"/"上周"等）+ Issue Key 自动提取 → 携带上下文对话
+  - **Phase 3**：从对话中提取 worklog → 推送到 Jira + 引用链接
+  - **Phase 4**：代码块高亮 + 导出 .md + 动态建议问题
+  - **History drawer**：切换/删除历史会话
+  - **Session rename** + 分页 + 搜索 + Markdown 表格/链接渲染
+- **E2E 全流程测试**（`tests/test_e2e_full_lifecycle.py`）：12 阶段从空环境 → 安装 → 采集 → 生成 → 审批 → 提交 → 删除，mock LLM + Jira，CI 三平台跑。总测试数 386。
+
+### Fixed
+- 无新增 fix（0.3.1 的 fix 已发布）。
+
+---
+
 ## [0.3.1] — 2026-04-16
 
 Bug fix + 功能增量，主要解决定时任务不触发的问题。
