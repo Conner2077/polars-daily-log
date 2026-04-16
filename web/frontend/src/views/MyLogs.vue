@@ -107,10 +107,19 @@
     />
 
     <!-- Log cards -->
-    <div v-for="draft in drafts" :key="draft.id" class="log-card">
-      <!-- Card header -->
-      <div class="log-header">
+    <div
+      v-for="draft in drafts"
+      :key="draft.id"
+      :class="['log-card', { collapsed: !isToday && !expandedIds.has(draft.id) }]"
+    >
+      <!-- Card header (clickable to toggle in "过去" mode) -->
+      <div
+        class="log-header"
+        :class="{ clickable: !isToday }"
+        @click="!isToday && toggleExpand(draft.id)"
+      >
         <div class="log-header-left">
+          <span v-if="!isToday" class="expand-arrow" :class="{ open: expandedIds.has(draft.id) }">›</span>
           <span class="log-period">
             {{ draft.period_start && draft.period_end && draft.period_start !== draft.period_end
               ? `${draft.period_start} ~ ${draft.period_end}`
@@ -129,6 +138,14 @@
           >{{ statusLabel(draft.status) }}</el-tag>
         </div>
       </div>
+
+      <!-- Collapsed preview (only in "过去" mode when not expanded) -->
+      <div v-if="!isToday && !expandedIds.has(draft.id)" class="log-preview">
+        {{ draftPreview(draft) }}
+      </div>
+
+      <!-- Card body — hidden when collapsed in "过去" mode -->
+      <div v-show="isToday || expandedIds.has(draft.id)" class="log-body">
 
       <!-- Daily log: 全部活动 (raw, all-inclusive) -->
       <div v-if="isDailyTag(draft) && draft.full_summary" class="issue-section">
@@ -257,6 +274,7 @@
       <div v-else-if="draft.status === 'submitted'" class="log-actions">
         <el-button round size="small" @click="showAudit(draft.id)">查看审计记录</el-button>
       </div>
+      </div><!-- /.log-body -->
     </div>
 
     <el-dialog v-model="auditVisible" title="审计记录" width="600px">
@@ -345,6 +363,7 @@ const historyFilters = [
 // a dedicated flag because the tag filter alone ('daily' + today's date)
 // can't distinguish "today's daily" from "all daily history".
 const isToday = ref(true)
+const expandedIds = ref(new Set())
 const historyOpen = ref(false)
 let closeHistoryTimer = null
 
@@ -396,6 +415,34 @@ function cancelCloseHistory() {
 function toggleHistoryOpen() {
   historyOpen.value = !historyOpen.value
   if (historyOpen.value) isToday.value = false
+}
+
+function toggleExpand(id) {
+  const s = new Set(expandedIds.value)
+  if (s.has(id)) s.delete(id)
+  else s.add(id)
+  expandedIds.value = s
+}
+
+function draftPreview(draft) {
+  // Build a short one-line summary from the draft content
+  const parts = []
+  // Try issue keys + summaries
+  const issues = parseIssues(draft.summary)
+  if (issues && issues.length) {
+    for (const iss of issues.slice(0, 3)) {
+      const label = iss.issue_key === 'OTHER' ? '其他' : iss.issue_key
+      const text = (iss.summary || '').replace(/[\n\r]+/g, ' ').trim()
+      parts.push(text ? `${label}: ${text}` : label)
+    }
+    if (issues.length > 3) parts.push(`+${issues.length - 3} 项`)
+  } else if (draft.full_summary) {
+    parts.push(draft.full_summary.replace(/[\n\r#*]+/g, ' ').trim())
+  } else if (draft.summary && typeof draft.summary === 'string') {
+    parts.push(draft.summary.replace(/[\n\r#*]+/g, ' ').trim())
+  }
+  const joined = parts.join(' · ')
+  return joined.length > 120 ? joined.slice(0, 120) + '…' : joined || '暂无内容'
 }
 
 function tagLabel(tag) {
@@ -807,6 +854,53 @@ onMounted(() => { loadJiraContext(); loadDrafts() })
   border-radius: var(--radius);
   padding: 24px;
   margin-bottom: 16px;
+  transition: box-shadow 0.2s ease;
+}
+
+.log-card.collapsed {
+  padding: 16px 24px;
+  cursor: pointer;
+}
+
+.log-card.collapsed:hover {
+  box-shadow: 0 2px 12px -4px rgba(0, 0, 0, 0.08);
+}
+
+.log-header.clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.expand-arrow {
+  display: inline-block;
+  font-size: 16px;
+  color: var(--ink-dim);
+  transition: transform 0.2s ease;
+  margin-right: 4px;
+  width: 12px;
+  text-align: center;
+}
+
+.expand-arrow.open {
+  transform: rotate(90deg);
+  color: var(--ink);
+}
+
+.log-preview {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--ink-muted);
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.log-body {
+  margin-top: 16px;
 }
 
 .log-header {
