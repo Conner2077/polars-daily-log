@@ -22,6 +22,12 @@ SERVER_CONFIG="${PDL_SERVER_CONFIG:-$SCRIPT_DIR/config.yaml}"
 COLLECTOR_CONFIG="${PDL_COLLECTOR_CONFIG:-$SCRIPT_DIR/collector.yaml}"
 SERVER_PORT="${PDL_SERVER_PORT:-8888}"
 
+# Export so subprocesses (mcp_server, cli_query) can resolve data_dir from
+# the same config the user set. Without this, those tools fall back to
+# ~/.auto_daily_log even when system.data_dir is customised.
+export PDL_SERVER_CONFIG="$SERVER_CONFIG"
+export PDL_COLLECTOR_CONFIG="$COLLECTOR_CONFIG"
+
 SERVER_PIDFILE="$PID_DIR/server.pid"
 SERVER_LOG="$LOG_DIR/server.log"
 COLLECTOR_PIDFILE="$PID_DIR/collector.pid"
@@ -518,6 +524,12 @@ ${BOLD}TOP-LEVEL${NC}
                ./pdl query worklogs --issue PDL-42
                ./pdl query commits --date 2026-04-16 --format table
                ./pdl query issues --all-issues
+  update       check for / apply self-updates from GitHub Releases
+               ./pdl update check                  # is there a newer version?
+               ./pdl update apply --target-version X --wheel-url URL
+               ./pdl update list-backups
+               ./pdl update rollback --backup ID
+               ./pdl update prune --keep 3
   clean        remove pid / log files
   help         show this message
 
@@ -592,6 +604,18 @@ main() {
         query)
             activate_venv
             python -m auto_daily_log.cli_query "$@"
+            ;;
+        update)
+            local action="${1:-check}"; shift || true
+            activate_venv
+            case "$action" in
+                check)         python -m auto_daily_log.updater check "$@" ;;
+                apply)         python -m auto_daily_log.updater apply "$@" ;;
+                rollback)      python -m auto_daily_log.updater rollback "$@" ;;
+                list-backups)  python -m auto_daily_log.updater list-backups ;;
+                prune)         python -m auto_daily_log.updater prune "$@" ;;
+                *)             err "Unknown update action: $action"; exit 2 ;;
+            esac
             ;;
         clean)    do_clean ;;
         help|-h|--help) usage ;;

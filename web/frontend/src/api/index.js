@@ -67,4 +67,12 @@ export default {
     if (sourceType) params.source_type = sourceType
     return api.get('/search', { params })
   },
+  // Self-update endpoints — driven by the Settings → 自动更新 tab
+  // and the global "new version available" banner in App.vue.
+  checkForUpdate: (force = false) => api.get('/updates/check', { params: { force } }),
+  getUpdateStatus: () => api.get('/updates/status'),
+  installUpdate: (payload = {}) => api.post('/updates/install', payload),
+  listBackups: () => api.get('/updates/backups'),
+  rollbackUpdate: (backupId) => api.post('/updates/rollback', { backup_id: backupId }),
+  pruneBackups: (keep = 3) => api.post('/updates/prune', { keep }),
 }

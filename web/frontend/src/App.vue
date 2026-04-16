@@ -80,13 +80,20 @@
         <div class="user-block">
           <div class="user-divider"></div>
           <div class="user-row">
-            <div class="user-avatar">{{ userInitial }}</div>
+            <img
+              v-if="avatarSrc && !avatarFailed"
+              class="user-avatar user-avatar-img"
+              :src="avatarSrc"
+              alt=""
+              @error="onAvatarError"
+            />
+            <div v-else class="user-avatar">{{ userInitial }}</div>
             <div class="user-meta">
               <div class="user-name">{{ userName }}</div>
-              <div class="user-handle">
+              <div class="user-handle" v-if="userHandle">
                 <span v-if="jiraUser" class="jira-dot connected" title="Jira 已登录"></span>
                 <span v-else class="jira-dot disconnected" title="Jira 未登录"></span>
-                {{ jiraUser || userHandle }}
+                {{ userHandle }}
               </div>
             </div>
           </div>
@@ -103,6 +110,22 @@
 
     <!-- Main content -->
     <main class="main">
+      <!-- Update available banner — non-blocking, dismissible per session -->
+      <div
+        v-if="updateAvailable && !updateBannerDismissed"
+        class="update-banner"
+      >
+        <span class="update-banner-text">
+          🆕 新版本 <strong>v{{ updateLatest }}</strong> 已发布
+          <span class="update-banner-current">（当前 v{{ updateCurrent }}）</span>
+        </span>
+        <span class="update-banner-actions">
+          <router-link to="/settings?tab=updates" class="update-banner-link" @click="updateBannerDismissed = true">
+            前往升级 →
+          </router-link>
+          <button class="update-banner-close" @click="updateBannerDismissed = true" aria-label="关闭">×</button>
+        </span>
+      </div>
       <router-view />
     </main>
 
@@ -165,23 +188,45 @@ async function checkJiraStatus() {
   try {
     const res = await api.getJiraStatus()
     jiraUser.value = res.data.logged_in ? res.data.username : null
+    // Re-check avatar cache on every status ping — cheap, and ensures
+    // the img src refreshes once the backend finishes the first download.
+    if (jiraUser.value) await loadUser()
   } catch (e) { /* ignore */ }
 }
 
 // ─── User profile ───────────────────────────────────────────
-const userName = ref('Conner')
-const userHandle = ref('connery')
+// Display priority: user_nickname > jira_username > 'User'
+const userNickname = ref('')
+const jiraUsername = ref('')
+const jiraAvatarCacheBust = ref('')
+const userName = computed(() => userNickname.value || jiraUsername.value || 'User')
+const userHandle = computed(() => jiraUsername.value || '')
 const userInitial = computed(() => (userName.value || 'U').charAt(0).toUpperCase())
+const avatarSrc = computed(() =>
+  jiraAvatarCacheBust.value ? `/api/settings/jira-avatar?v=${jiraAvatarCacheBust.value}` : ''
+)
+const avatarFailed = ref(false)
+
+function onAvatarError() { avatarFailed.value = true }
 
 async function loadUser() {
   try {
     const res = await api.getSettings()
-    const settings = res.data || {}
-    // settings may be a flat dict or nested; try a few common shapes
-    const name = settings.user_name || settings.username || settings.display_name
-    const handle = settings.user_handle || settings.jira_username || settings.handle
-    if (name) userName.value = name
-    if (handle) userHandle.value = handle
+    const rows = res.data || []
+    const nicknameRow = rows.find(r => r.key === 'user_nickname')
+    const jiraRow = rows.find(r => r.key === 'jira_username')
+    const avatarRow = rows.find(r => r.key === 'jira_avatar_path')
+    userNickname.value = (nicknameRow && nicknameRow.value) || ''
+    jiraUsername.value = (jiraRow && jiraRow.value) || ''
+    // Cache-bust only when the avatar row actually exists — keeps src stable
+    // across renders, so the browser can cache between status polls.
+    const bust = avatarRow && avatarRow.updated_at ? avatarRow.updated_at : ''
+    if (bust && bust !== jiraAvatarCacheBust.value) {
+      jiraAvatarCacheBust.value = bust
+      avatarFailed.value = false
+    } else if (!avatarRow) {
+      jiraAvatarCacheBust.value = ''
+    }
   } catch (e) { /* fallback to defaults */ }
 }
 
@@ -337,6 +382,30 @@ async function submitFeedback() {
 // ─── Mobile drawer state ────────────────────────────────────
 const mobileOpen = ref(false)
 
+// ─── Update banner ──────────────────────────────────────────
+const updateAvailable = ref(false)
+const updateLatest = ref('')
+const updateCurrent = ref('')
+const updateBannerDismissed = ref(
+  sessionStorage.getItem('pdl_update_banner_dismissed') === '1'
+)
+// Persist dismissal per-tab so the banner doesn't re-pop after a route change
+import { watch } from 'vue'
+watch(updateBannerDismissed, (v) => {
+  if (v) sessionStorage.setItem('pdl_update_banner_dismissed', '1')
+})
+
+async function checkForUpdate() {
+  try {
+    const r = await api.checkForUpdate(false)
+    updateAvailable.value = !!r.data.available
+    updateLatest.value = r.data.latest
+    updateCurrent.value = r.data.current
+  } catch (e) {
+    // silent — banner just stays hidden
+  }
+}
+
 // ─── Polling ────────────────────────────────────────────────
 let pollHandle = null
 let jiraHandle = null
@@ -346,6 +415,7 @@ onMounted(() => {
   loadUser()
   loadDashboardCounts()
   loadDevices()
+  checkForUpdate()
   // refresh sidebar data every 30s
   pollHandle = setInterval(() => {
     loadDashboardCounts()
@@ -620,6 +690,12 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 
+.user-avatar-img {
+  object-fit: cover;
+  background: var(--bg-soft);
+  color: transparent;
+}
+
 .user-meta {
   min-width: 0;
   flex: 1;
@@ -781,4 +857,41 @@ onBeforeUnmount(() => {
     z-index: 95;
   }
 }
+
+/* ────────────── Update banner ────────────── */
+.update-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 18px;
+  margin: 0 0 16px 0;
+  background: #fffbe6;
+  border: 1px solid #ffe58f;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #614700;
+}
+.update-banner-text strong { color: #ad6800; }
+.update-banner-current { opacity: 0.7; margin-left: 4px; }
+.update-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.update-banner-link {
+  color: #1677ff;
+  text-decoration: none;
+  font-weight: 500;
+}
+.update-banner-link:hover { text-decoration: underline; }
+.update-banner-close {
+  background: none;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  color: #888;
+  padding: 0 4px;
+}
+.update-banner-close:hover { color: #333; }
 </style>
