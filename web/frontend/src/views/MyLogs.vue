@@ -519,10 +519,16 @@ const headerSubtitle = computed(() => {
 
 async function loadDrafts() {
   if (activeTag.value) {
+    // Filter by tag (daily/weekly/monthly/custom)
     const res = await api.getWorklogsByTag(activeTag.value)
     drafts.value = res.data
-  } else {
+  } else if (selectedDate.value) {
+    // No tag but has date → show that day's drafts (used by "今日")
     const res = await api.getWorklogs(selectedDate.value)
+    drafts.value = res.data
+  } else {
+    // No tag, no date → "全部" in history mode: fetch all drafts
+    const res = await api.getWorklogs()
     drafts.value = res.data
   }
 }

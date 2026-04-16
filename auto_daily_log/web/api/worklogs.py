@@ -97,14 +97,18 @@ async def drafts_preview(
 @router.get("/worklogs")
 async def list_drafts(request: Request, date: str = Query(default=None), tag: str = Query(default=None)):
     db = request.app.state.db
-    target = date or __import__("datetime").date.today().isoformat()
     if tag:
         return await db.fetch_all(
             "SELECT * FROM worklog_drafts WHERE tag = ? ORDER BY date DESC, created_at DESC", (tag,)
         )
+    if date:
+        return await db.fetch_all(
+            "SELECT * FROM worklog_drafts WHERE date = ? ORDER BY CASE tag WHEN 'daily' THEN 0 ELSE 1 END, created_at DESC",
+            (date,),
+        )
+    # No date, no tag → return all drafts (for "全部" history view)
     return await db.fetch_all(
-        "SELECT * FROM worklog_drafts WHERE date = ? ORDER BY CASE tag WHEN 'daily' THEN 0 ELSE 1 END, created_at DESC",
-        (target,),
+        "SELECT * FROM worklog_drafts ORDER BY date DESC, CASE tag WHEN 'daily' THEN 0 ELSE 1 END, created_at DESC"
     )
 
 class GenerateRequest(BaseModel):
