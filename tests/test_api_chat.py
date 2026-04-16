@@ -847,3 +847,85 @@ def test_format_transcript_tags_roles():
 
 def test_format_transcript_empty():
     assert chat_module._format_transcript([]) == ""
+
+
+# ─── Phase 4: GET /chat/sessions/{id} + /chat/suggestions ─────────────
+
+@pytest.mark.asyncio
+async def test_get_session_returns_metadata(app_client, monkeypatch):
+    _patch_engine(monkeypatch, _FakeLLM(response="hi"))
+    # Create a session by sending one chat message.
+    resp = await app_client.post("/api/chat", json={
+        "messages": [{"role": "user", "text": "首条消息用作标题"}],
+    })
+    events = _parse_sse(resp.text)
+    session_id = next(e["session_id"] for e in events if isinstance(e, dict) and "session_id" in e)
+
+    meta_resp = await app_client.get(f"/api/chat/sessions/{session_id}")
+    assert meta_resp.status_code == 200
+    meta = meta_resp.json()
+    assert meta["id"] == session_id
+    assert meta["title"] == "首条消息用作标题"
+
+
+@pytest.mark.asyncio
+async def test_get_session_unknown_id_returns_404(app_client):
+    resp = await app_client.get("/api/chat/sessions/does-not-exist")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_suggestions_fallback_on_empty_db(app_client):
+    resp = await app_client.get("/api/chat/suggestions")
+    assert resp.status_code == 200
+    body = resp.json()
+    # With an empty DB only the priority-5 fallback chip applies.
+    assert body["suggestions"] == ["最近一周干了啥？"]
+
+
+@pytest.mark.asyncio
+async def test_suggestions_surfaces_mentioned_issue_key(app_client):
+    # Seed an active Jira issue and an activity whose llm_summary mentions it.
+    db = app_client._transport.app.state.db
+    await db.execute(
+        "INSERT INTO jira_issues (issue_key, summary, is_active) VALUES (?, ?, 1)",
+        ("PDL-99", "Chat phase 4"),
+    )
+    await db.execute(
+        "INSERT INTO activities (timestamp, app_name, category, llm_summary, duration_sec, machine_id) "
+        "VALUES (datetime('now'), 'VSCode', 'coding', ?, 60, 'local')",
+        ("在 PDL-99 的 chat.py 里加 suggestions 端点",),
+    )
+
+    resp = await app_client.get("/api/chat/suggestions")
+    assert resp.status_code == 200
+    suggestions = resp.json()["suggestions"]
+    assert "PDL-99 昨天/今天进展怎样？" in suggestions
+    assert "今天干了什么？" in suggestions
+    assert suggestions[-1] == "最近一周干了啥？"
+    assert len(suggestions) <= 5
+
+
+@pytest.mark.asyncio
+async def test_suggestions_caps_at_five_chips(app_client):
+    db = app_client._transport.app.state.db
+    # 3 active issues all mentioned in recent activities: triggers chip (1)
+    # up to 2 issue-specific chips, (2) today-activities, (4) ≥3 unique → 总分类,
+    # plus always-on fallback. 5 total is the expected cap.
+    for key in ["PDL-1", "PDL-2", "PDL-3"]:
+        await db.execute(
+            "INSERT INTO jira_issues (issue_key, summary, is_active) VALUES (?, ?, 1)",
+            (key, f"Issue {key}"),
+        )
+        await db.execute(
+            "INSERT INTO activities (timestamp, app_name, category, llm_summary, duration_sec, machine_id) "
+            "VALUES (datetime('now'), 'VSCode', 'coding', ?, 60, 'local')",
+            (f"Working on {key}",),
+        )
+    resp = await app_client.get("/api/chat/suggestions")
+    assert resp.status_code == 200
+    suggestions = resp.json()["suggestions"]
+    assert len(suggestions) == 5
+    assert suggestions[-1] == "最近一周干了啥？"
+    # Deduped — no string repeats.
+    assert len(set(suggestions)) == 5

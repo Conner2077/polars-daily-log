@@ -8,6 +8,12 @@
       </div>
       <div class="page-header-right">
         <el-button
+          v-if="history.length > 0 && !busy"
+          round
+          size="small"
+          @click="exportTranscript"
+        >导出</el-button>
+        <el-button
           v-if="history.length > 0"
           round
           size="small"
@@ -311,12 +317,71 @@ async function onPushToJira() {
   }
 }
 
-const suggestions = [
+// Suggestions come from the backend (computed against the user's actual
+// data). If the endpoint is unreachable we fall back to a static list
+// so the chat intro stays usable on a fresh / empty DB.
+const FALLBACK_SUGGESTIONS = [
   '最近一周干了啥？',
   '今天的主要工作有哪些？',
   '最近在哪个 Jira 任务上花时间最多？',
   '总结一下这周的开发主线。',
 ]
+const suggestions = ref([...FALLBACK_SUGGESTIONS])
+
+async function loadSuggestions() {
+  try {
+    const res = await fetch('/api/chat/suggestions')
+    if (!res.ok) return
+    const body = await res.json()
+    if (Array.isArray(body.suggestions) && body.suggestions.length > 0) {
+      suggestions.value = body.suggestions
+    }
+  } catch (_) {
+    // keep fallback
+  }
+}
+
+// Title of the active session (used for export filename + header).
+const sessionTitle = ref('')
+
+async function loadSessionTitle(id) {
+  if (!id) { sessionTitle.value = ''; return }
+  try {
+    const res = await fetch(`/api/chat/sessions/${encodeURIComponent(id)}`)
+    if (!res.ok) { sessionTitle.value = ''; return }
+    const body = await res.json()
+    sessionTitle.value = (body && body.title) || ''
+  } catch (_) {
+    sessionTitle.value = ''
+  }
+}
+
+function exportTranscript() {
+  if (history.value.length === 0) return
+  const title = sessionTitle.value || '对话'
+  const parts = [`# Chat — ${title}`, '']
+  for (const m of history.value) {
+    if (m.error) continue
+    const heading = m.role === 'user' ? '## 用户' : '## 助手'
+    parts.push(heading, '', m.text, '')
+  }
+  const content = parts.join('\n')
+
+  const now = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`
+  const filename = `chat-${stamp}.md`
+
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
 
 const boxPlaceholder = computed(() =>
   busy.value ? '生成中...' : '问点什么... (Enter 发送, Shift+Enter 换行)'
@@ -355,6 +420,7 @@ function resetChat() {
   if (busy.value) return
   localStorage.removeItem(SESSION_STORAGE_KEY)
   sessionId.value = null
+  sessionTitle.value = ''
   history.value = []
   draft.value = ''
   draftsPreview.value = null
@@ -392,11 +458,19 @@ function retry(errorIdx) {
 }
 
 // Lightweight markdown renderer — matches DEFAULT_CHAT_PROMPT's output surface.
-// Handles ### headers, **bold**, `code`, "- " bullets, line breaks.
+// Handles ``` fenced code blocks, ### headers, **bold**, `code`, "- " bullets,
+// line breaks.
 //
 // Citation linkification: dates (YYYY-MM-DD) → #/my-logs?date=..., issue
 // keys (ABC-123) → #/issues?key=.... Done on the raw text BEFORE backtick
 // code substitution so that `2026-04-16` inside inline code stays literal.
+// Content inside fenced code blocks is NEVER linkified — it's code, not
+// narrative.
+//
+// Mid-stream behavior: when the opening ``` has arrived but the closer
+// hasn't, we render what we have so far as an open <pre><code> block.
+// When the closer arrives on a later chunk, the whole block flips to the
+// closed state (identical DOM minus the `open` class).
 function renderMd(md) {
   if (!md) return ''
   const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -419,21 +493,60 @@ function renderMd(md) {
     return rebuilt.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
   }
 
-  const lines = md.split(/\r?\n/)
+  // First pass: peel fenced blocks out of the line stream so the
+  // narrative pass never sees their content (no linkify / no inline).
+  const allLines = md.split(/\r?\n/)
+  // Tokens: { type: 'line', text } | { type: 'code', lang, body, closed }
+  const tokens = []
+  let i = 0
+  while (i < allLines.length) {
+    const line = allLines[i]
+    const openMatch = /^```(\S*)\s*$/.exec(line.trimEnd())
+    if (openMatch) {
+      const lang = openMatch[1] || ''
+      const bodyLines = []
+      let closed = false
+      let j = i + 1
+      while (j < allLines.length) {
+        if (/^```\s*$/.test(allLines[j].trimEnd())) {
+          closed = true
+          break
+        }
+        bodyLines.push(allLines[j])
+        j++
+      }
+      tokens.push({ type: 'code', lang, body: bodyLines.join('\n'), closed })
+      // Skip past the closer when present; when unclosed we've consumed
+      // the rest of the input so the outer loop will stop naturally.
+      i = closed ? j + 1 : j
+      continue
+    }
+    tokens.push({ type: 'line', text: line })
+    i++
+  }
+
   let out = ''
   let inList = false
-  for (const raw of lines) {
-    const line = raw.trimEnd()
+  const flushList = () => { if (inList) { out += '</ul>'; inList = false } }
+  for (const tok of tokens) {
+    if (tok.type === 'code') {
+      flushList()
+      const cls = tok.lang ? ' class="language-' + esc(tok.lang) + '"' : ''
+      const openAttr = tok.closed ? '' : ' data-open="1"'
+      out += '<pre' + openAttr + '><code' + cls + '>' + esc(tok.body) + '</code></pre>'
+      continue
+    }
+    const line = tok.text.trimEnd()
     if (/^###\s+/.test(line)) {
-      if (inList) { out += '</ul>'; inList = false }
+      flushList()
       out += '<h4>' + inline(line.replace(/^###\s+/, '')) + '</h4>'
     } else if (/^-\s+/.test(line)) {
       if (!inList) { out += '<ul>'; inList = true }
       out += '<li>' + inline(line.replace(/^-\s+/, '')) + '</li>'
     } else if (line === '') {
-      if (inList) { out += '</ul>'; inList = false }
+      flushList()
     } else {
-      if (inList) { out += '</ul>'; inList = false }
+      flushList()
       out += inline(line) + '<br/>'
     }
   }
@@ -498,6 +611,9 @@ async function ask(text) {
             // so a reload picks up right where we left off.
             sessionId.value = evt.session_id
             try { localStorage.setItem(SESSION_STORAGE_KEY, evt.session_id) } catch (_) {}
+            // Pull the title (first-user-message-derived) so exports
+            // can use it instead of the generic "对话" fallback.
+            loadSessionTitle(evt.session_id)
           } else if (evt.text !== undefined) {
             if (aiIdx < 0) {
               aiIdx = history.value.length
@@ -558,7 +674,11 @@ async function restoreSession() {
 
 onMounted(async () => {
   autosize()
+  // Fire-and-forget: the intro chips render from the fallback until the
+  // request resolves, so a slow backend never blocks focusing the input.
+  loadSuggestions()
   await restoreSession()
+  if (sessionId.value) loadSessionTitle(sessionId.value)
   boxEl.value && boxEl.value.focus()
 })
 </script>

@@ -202,6 +202,35 @@ async def list_sessions(request: Request):
     return rows
 
 
+@router.get("/chat/suggestions")
+async def get_suggestions(request: Request):
+    """Dynamic suggestion chips for the chat intro screen.
+
+    Suggestions are derived from what's actually in the user's local data
+    right now — no point suggesting "PDL-42 今天进展怎样" if nothing
+    mentions PDL-42. Ordering follows the priority in the docstring of
+    ``_compute_suggestions``; output is deduped + capped at 5.
+    """
+    db = request.app.state.db
+    suggestions = await _compute_suggestions(db, today=date.today())
+    return {"suggestions": suggestions}
+
+
+@router.get("/chat/sessions/{session_id}")
+async def get_session(session_id: str, request: Request):
+    """Single-session metadata. Used by the frontend to label the export
+    file with the session title. 404 when the id is unknown so a stale
+    localStorage id surfaces the same way as the messages endpoint."""
+    db = request.app.state.db
+    row = await db.fetch_one(
+        "SELECT id, title, created_at, updated_at FROM chat_sessions WHERE id = ?",
+        (session_id,),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="session not found")
+    return row
+
+
 @router.get("/chat/sessions/{session_id}/messages")
 async def get_session_messages(session_id: str, request: Request):
     db = request.app.state.db
@@ -543,6 +572,110 @@ def _validate_draft_rows(rows: list) -> list[dict]:
             "summary": summary,
         })
     return out
+
+
+async def _compute_suggestions(db, today: date) -> list[str]:
+    """Build 3-5 suggestion chips tailored to the user's recent data.
+
+    Priority order (used to break ties when we need to trim to 5):
+      1. Active jira_issues whose key appears in activity llm_summary in the
+         last 2 days — suggest "{key} 昨天/今天进展怎样？" for up to 2 most-
+         frequently-mentioned issues.
+      2. "今天干了什么？" if today has activity rows.
+      3. "本周的开发主线是什么？" if ≥2 days this week have worklog_drafts.
+      4. "最近在哪个 Jira 任务上花时间最多？" if ≥3 unique jira_issues have
+         recent activity.
+      5. Fallback "最近一周干了啥？" is always appended (deduped).
+
+    Dedupe is by string equality; ordering is stable so lower-priority chips
+    never push higher-priority ones out when we cap at 5.
+    """
+    suggestions: list[str] = []
+
+    # (1) active issues mentioned in last-2-day activity llm_summary.
+    # Pull candidate keys first (bounded set), then count mentions in SQL so
+    # we don't have to drag the full llm_summary text back into Python.
+    since_2d = (today - timedelta(days=2)).isoformat()
+    active_issues = await db.fetch_all(
+        "SELECT issue_key FROM jira_issues WHERE is_active = 1",
+        (),
+    )
+    mention_counts: list[tuple[str, int]] = []
+    for row in active_issues:
+        key = row["issue_key"]
+        if not key:
+            continue
+        count_row = await db.fetch_one(
+            "SELECT COUNT(*) AS c FROM activities "
+            "WHERE date(timestamp) >= ? "
+            "  AND llm_summary IS NOT NULL "
+            "  AND llm_summary LIKE ? "
+            "  AND (deleted_at IS NULL)",
+            (since_2d, f"%{key}%"),
+        )
+        c = int(count_row["c"]) if count_row else 0
+        if c > 0:
+            mention_counts.append((key, c))
+    mention_counts.sort(key=lambda kv: (-kv[1], kv[0]))
+    for key, _ in mention_counts[:2]:
+        suggestions.append(f"{key} 昨天/今天进展怎样？")
+
+    # (2) today had any activities?
+    today_iso = today.isoformat()
+    today_act = await db.fetch_one(
+        "SELECT COUNT(*) AS c FROM activities "
+        "WHERE date(timestamp) = ? AND (deleted_at IS NULL)",
+        (today_iso,),
+    )
+    if today_act and int(today_act["c"]) > 0:
+        suggestions.append("今天干了什么？")
+
+    # (3) this week ≥2 distinct days of worklog_drafts.
+    # ISO week Monday — matches chat_retrieval's week semantics.
+    monday = today - timedelta(days=today.isoweekday() - 1)
+    sunday = monday + timedelta(days=6)
+    week_days = await db.fetch_one(
+        "SELECT COUNT(DISTINCT date) AS c FROM worklog_drafts "
+        "WHERE date >= ? AND date <= ?",
+        (monday.isoformat(), sunday.isoformat()),
+    )
+    if week_days and int(week_days["c"]) >= 2:
+        suggestions.append("本周的开发主线是什么？")
+
+    # (4) ≥3 unique active issues with recent (≤7d) activity mentions.
+    since_7d = (today - timedelta(days=7)).isoformat()
+    unique_recent = 0
+    for row in active_issues:
+        key = row["issue_key"]
+        if not key:
+            continue
+        hit = await db.fetch_one(
+            "SELECT 1 FROM activities "
+            "WHERE date(timestamp) >= ? "
+            "  AND llm_summary IS NOT NULL "
+            "  AND llm_summary LIKE ? "
+            "  AND (deleted_at IS NULL) LIMIT 1",
+            (since_7d, f"%{key}%"),
+        )
+        if hit:
+            unique_recent += 1
+            if unique_recent >= 3:
+                break
+    if unique_recent >= 3:
+        suggestions.append("最近在哪个 Jira 任务上花时间最多？")
+
+    # (5) fallback is always available.
+    suggestions.append("最近一周干了啥？")
+
+    # Dedupe while preserving order, then cap at 5.
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for s in suggestions:
+        if s in seen:
+            continue
+        seen.add(s)
+        deduped.append(s)
+    return deduped[:5]
 
 
 def _sse(payload: dict) -> str:
