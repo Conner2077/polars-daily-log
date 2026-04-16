@@ -247,7 +247,9 @@ async def test_chat_new_session_is_advertised_as_first_sse_event(app_client, mon
     # Messages endpoint returns exactly [user, ai] in order
     msg_resp = await app_client.get(f"/api/chat/sessions/{session_id}/messages")
     assert msg_resp.status_code == 200
-    msgs = msg_resp.json()
+    msg_body = msg_resp.json()
+    assert msg_body["total"] == 2
+    msgs = msg_body["messages"]
     assert len(msgs) == 2
     assert msgs[0]["role"] == "user"
     assert msgs[0]["text"] == "第一条消息"
@@ -289,7 +291,9 @@ async def test_chat_reuses_session_and_appends_messages(app_client, monkeypatch)
     assert rows[0]["message_count"] == 4
 
     msg_resp = await app_client.get(f"/api/chat/sessions/{session_id}/messages")
-    msgs = msg_resp.json()
+    msg_body = msg_resp.json()
+    assert msg_body["total"] == 4
+    msgs = msg_body["messages"]
     assert len(msgs) == 4
     assert [m["role"] for m in msgs] == ["user", "ai", "user", "ai"]
     assert [m["text"] for m in msgs] == ["第一轮", "first reply", "第二轮", "second reply"]
@@ -342,7 +346,9 @@ async def test_chat_error_path_persists_user_but_not_ai(app_client, monkeypatch)
     assert len(error_events) == 1
 
     msg_resp = await app_client.get(f"/api/chat/sessions/{session_id}/messages")
-    msgs = msg_resp.json()
+    msg_body = msg_resp.json()
+    assert msg_body["total"] == 1
+    msgs = msg_body["messages"]
     assert len(msgs) == 1
     assert msgs[0]["role"] == "user"
     assert msgs[0]["text"] == "会失败的问题"
@@ -948,7 +954,8 @@ async def test_ai_reply_persists_even_when_client_disconnects_mid_stream(app_cli
     # Give the detached producer time to finish the LLM call + DB write.
     for _ in range(40):  # up to 2s, plenty for the 3-chunk fake
         msgs = await app_client.get(f"/api/chat/sessions/{got_session_id}/messages")
-        rows = msgs.json()
+        msg_body = msgs.json()
+        rows = msg_body["messages"]
         if len(rows) == 2 and rows[1]["role"] == "ai":
             break
         await asyncio.sleep(0.05)
@@ -984,3 +991,156 @@ async def test_suggestions_caps_at_five_chips(app_client):
     assert suggestions[-1] == "最近一周干了啥？"
     # Deduped — no string repeats.
     assert len(set(suggestions)) == 5
+
+
+# ─── Phase 5: session rename, pagination, cross-session search ──────
+
+
+@pytest.mark.asyncio
+async def test_rename_session(app_client, monkeypatch):
+    """PATCH /api/chat/sessions/{id} updates the title and GET reflects it."""
+    fake = _FakeLLM(response="ok")
+    _patch_engine(monkeypatch, fake)
+
+    resp = await app_client.post("/api/chat", json={
+        "messages": [{"role": "user", "text": "原标题"}],
+    })
+    events = _parse_sse(resp.text)
+    session_id = events[0]["session_id"]
+
+    # Rename
+    patch_resp = await app_client.patch(
+        f"/api/chat/sessions/{session_id}",
+        json={"title": "新标题"},
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["title"] == "新标题"
+    assert patch_resp.json()["id"] == session_id
+
+    # GET confirms
+    meta = await app_client.get(f"/api/chat/sessions/{session_id}")
+    assert meta.status_code == 200
+    assert meta.json()["title"] == "新标题"
+
+
+@pytest.mark.asyncio
+async def test_rename_session_404_for_unknown(app_client):
+    resp = await app_client.patch(
+        "/api/chat/sessions/nonexistent",
+        json={"title": "x"},
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_messages_pagination(app_client, monkeypatch):
+    """Seed 5 messages (user+ai pairs), request with limit=2, assert pagination."""
+    # Create a session with 3 user turns → 3 user + 3 ai = 6 messages
+    # But spec says seed 5 messages. Let's do 2 user turns (4 msgs) + 1 more user (5th).
+    # Actually, each user turn via _FakeLLM produces 2 messages (user + ai).
+    # Let's just do direct DB seeding after creating a session.
+    fake = _FakeLLM(response="reply1")
+    _patch_engine(monkeypatch, fake)
+
+    resp = await app_client.post("/api/chat", json={
+        "messages": [{"role": "user", "text": "msg1"}],
+    })
+    events = _parse_sse(resp.text)
+    session_id = events[0]["session_id"]
+
+    # Now we have 2 messages (user + ai). Add 3 more directly.
+    db = app_client._transport.app.state.db
+    await db.execute(
+        "INSERT INTO chat_messages (session_id, role, text) VALUES (?, 'user', ?)",
+        (session_id, "msg2"),
+    )
+    await db.execute(
+        "INSERT INTO chat_messages (session_id, role, text) VALUES (?, 'ai', ?)",
+        (session_id, "reply2"),
+    )
+    await db.execute(
+        "INSERT INTO chat_messages (session_id, role, text) VALUES (?, 'user', ?)",
+        (session_id, "msg3"),
+    )
+    # Total: 5 messages
+
+    # Request with limit=2
+    r1 = await app_client.get(f"/api/chat/sessions/{session_id}/messages?limit=2")
+    assert r1.status_code == 200
+    body1 = r1.json()
+    assert body1["total"] == 5
+    assert len(body1["messages"]) == 2
+    assert body1["messages"][0]["text"] == "msg1"
+    assert body1["messages"][1]["text"] == "reply1"
+
+    # Request with offset=2&limit=2 → next 2 messages
+    r2 = await app_client.get(f"/api/chat/sessions/{session_id}/messages?offset=2&limit=2")
+    assert r2.status_code == 200
+    body2 = r2.json()
+    assert body2["total"] == 5
+    assert len(body2["messages"]) == 2
+    assert body2["messages"][0]["text"] == "msg2"
+    assert body2["messages"][1]["text"] == "reply2"
+
+
+@pytest.mark.asyncio
+async def test_chat_search_finds_across_sessions(app_client, monkeypatch):
+    """Create 2 sessions with different AI messages, search for a keyword
+    that appears in only one, assert only that session's result is returned."""
+    # Session 1 — AI mentions "polaris"
+    fake1 = _FakeLLM(response="你昨天在 polaris 项目上写了很多代码。")
+    _patch_engine(monkeypatch, fake1)
+    resp1 = await app_client.post("/api/chat", json={
+        "messages": [{"role": "user", "text": "干了啥"}],
+    })
+    events1 = _parse_sse(resp1.text)
+    sid1 = events1[0]["session_id"]
+
+    # Session 2 — AI mentions "dashboard"
+    fake2 = _FakeLLM(response="今天主要在做 dashboard 的 UI 调整。")
+    _patch_engine(monkeypatch, fake2)
+    resp2 = await app_client.post("/api/chat", json={
+        "messages": [{"role": "user", "text": "今天呢"}],
+    })
+    events2 = _parse_sse(resp2.text)
+    sid2 = events2[0]["session_id"]
+
+    # Search for "polaris" — should only find session 1
+    search_resp = await app_client.get("/api/chat/search?q=polaris")
+    assert search_resp.status_code == 200
+    results = search_resp.json()
+    assert len(results) == 1
+    assert results[0]["session_id"] == sid1
+    assert "polaris" in results[0]["text_snippet"]
+
+    # Search for "dashboard" — should only find session 2
+    search_resp2 = await app_client.get("/api/chat/search?q=dashboard")
+    assert search_resp2.status_code == 200
+    results2 = search_resp2.json()
+    assert len(results2) == 1
+    assert results2[0]["session_id"] == sid2
+    assert "dashboard" in results2[0]["text_snippet"]
+
+
+@pytest.mark.asyncio
+async def test_chat_search_empty_query_returns_empty(app_client):
+    resp = await app_client.get("/api/chat/search?q=")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_snippet_around_centres_keyword():
+    snippet = chat_module._snippet_around(
+        "aaaa keyword bbbb", "keyword", max_len=15
+    )
+    assert "keyword" in snippet
+
+
+def test_snippet_around_handles_keyword_at_start():
+    snippet = chat_module._snippet_around("keyword rest of text", "keyword", max_len=10)
+    assert "keyword" in snippet
+
+
+def test_snippet_around_missing_keyword():
+    snippet = chat_module._snippet_around("no match here", "xyz", max_len=10)
+    assert snippet == "no match h"

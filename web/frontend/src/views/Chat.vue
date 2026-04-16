@@ -49,31 +49,77 @@
           >+ 新建对话</el-button>
         </div>
 
-        <div v-if="sessionsList.length === 0" class="history-empty">
-          还没有历史对话。
+        <!-- Search bar -->
+        <div class="history-search-bar">
+          <input
+            v-model="searchQuery"
+            class="history-search-input"
+            type="text"
+            placeholder="搜索对话内容..."
+            @keydown.enter="doSearch"
+          />
         </div>
 
-        <ul v-else class="history-list">
+        <!-- Search results -->
+        <ul v-if="searchResults !== null" class="history-list">
+          <li v-if="searchResults.length === 0" class="history-empty" style="list-style:none">
+            无搜索结果。
+          </li>
           <li
-            v-for="s in sessionsList" :key="s.id"
+            v-for="(r, ri) in searchResults" :key="ri"
             class="history-row"
-            :class="{ active: s.id === sessionId }"
-            @click="pickSession(s)"
+            @click="pickSearchResult(r)"
           >
             <div class="history-row-main">
-              <div class="history-title" :title="s.title">{{ s.title || '(未命名)' }}</div>
-              <div class="history-meta">
-                {{ s.message_count }} 条 · {{ relativeTime(s.updated_at) }}
-              </div>
+              <div class="history-title">{{ r.session_title || '(未命名)' }}</div>
+              <div class="history-snippet" v-html="highlightSnippet(r.text_snippet, searchQuery)"></div>
             </div>
-            <button
-              class="history-del"
-              type="button"
-              title="删除"
-              @click.stop="onDeleteSession(s)"
-            >×</button>
           </li>
         </ul>
+
+        <!-- Normal session list -->
+        <template v-else>
+          <div v-if="sessionsList.length === 0" class="history-empty">
+            还没有历史对话。
+          </div>
+
+          <ul v-else class="history-list">
+            <li
+              v-for="s in sessionsList" :key="s.id"
+              class="history-row"
+              :class="{ active: s.id === sessionId, editing: editingSessionId === s.id }"
+              @click="pickSession(s)"
+            >
+              <div class="history-row-main">
+                <input
+                  v-if="editingSessionId === s.id"
+                  v-model="editingTitle"
+                  class="history-title-input"
+                  @click.stop
+                  @keydown.enter="saveRename(s)"
+                  @keydown.escape="cancelRename"
+                  @blur="saveRename(s)"
+                  ref="renamInputEl"
+                />
+                <div
+                  v-else
+                  class="history-title"
+                  :title="s.title"
+                  @click.stop="startRename(s)"
+                >{{ s.title || '(未命名)' }}</div>
+                <div class="history-meta">
+                  {{ s.message_count }} 条 · {{ relativeTime(s.updated_at) }}
+                </div>
+              </div>
+              <button
+                class="history-del"
+                type="button"
+                title="删除"
+                @click.stop="onDeleteSession(s)"
+              >×</button>
+            </li>
+          </ul>
+        </template>
       </div>
     </el-drawer>
 
@@ -81,6 +127,11 @@
     <div class="chat-shell">
       <!-- Message log -->
       <div ref="logEl" class="log">
+        <!-- Load more (pagination) -->
+        <div v-if="msgTotal > history.length && !busy" class="load-more-bar">
+          <a href="#" class="load-more-link" @click.prevent="loadMoreMessages">加载更多</a>
+        </div>
+
         <!-- Intro / suggestions -->
         <div v-if="history.length === 0" class="intro">
           <div class="intro-hero">
@@ -501,6 +552,10 @@ async function openHistory() {
   historyOpen.value = true
 }
 
+// Pagination state for message loading
+const msgTotal = ref(0)
+const MSG_PAGE = 50
+
 async function pickSession(s) {
   if (busy.value) return
   // Clicking the currently-active session is a no-op — just close.
@@ -509,20 +564,59 @@ async function pickSession(s) {
     return
   }
   try {
-    const resp = await fetch(`/api/chat/sessions/${encodeURIComponent(s.id)}/messages`)
+    const resp = await fetch(`/api/chat/sessions/${encodeURIComponent(s.id)}/messages?limit=${MSG_PAGE}`)
     if (!resp.ok) {
       ElMessage.error('载入失败')
       return
     }
-    const rows = await resp.json()
+    const body = await resp.json()
+    const rows = body.messages || []
+    msgTotal.value = body.total || 0
     sessionId.value = s.id
     sessionTitle.value = s.title || ''
     history.value = rows.map(r => ({ role: r.role, text: r.text }))
     draftsPreview.value = null
     historyOpen.value = false
+    searchQuery.value = ''
+    searchResults.value = null
     scrollToBottom()
   } catch (_) {
     ElMessage.error('载入失败')
+  }
+}
+
+async function loadMoreMessages() {
+  if (!sessionId.value || busy.value) return
+  const currentLen = history.value.length
+  // We need to fetch older messages. The current `history` contains the
+  // last `currentLen` messages (loaded with default offset=0 which gives
+  // the most recent). To get earlier messages, compute offset from total.
+  // Messages are ordered ASC by id, so offset 0 is the oldest.
+  // We currently have the last `currentLen` out of `msgTotal`.
+  const remaining = msgTotal.value - currentLen
+  if (remaining <= 0) return
+  const fetchLimit = Math.min(MSG_PAGE, remaining)
+  const fetchOffset = remaining - fetchLimit  // start of the next older page
+  try {
+    const resp = await fetch(
+      `/api/chat/sessions/${encodeURIComponent(sessionId.value)}/messages?offset=${fetchOffset}&limit=${fetchLimit}`
+    )
+    if (!resp.ok) return
+    const body = await resp.json()
+    const olderRows = (body.messages || []).map(r => ({ role: r.role, text: r.text }))
+    // Preserve scroll position: measure before prepending.
+    const el = logEl.value
+    const oldScrollHeight = el ? el.scrollHeight : 0
+    history.value = [...olderRows, ...history.value]
+    // Restore scroll position so user doesn't jump to top.
+    nextTick(() => {
+      if (el) {
+        const newScrollHeight = el.scrollHeight
+        el.scrollTop += (newScrollHeight - oldScrollHeight)
+      }
+    })
+  } catch (_) {
+    // silently fail
   }
 }
 
@@ -547,6 +641,87 @@ async function onDeleteSession(s) {
 function newFromHistory() {
   resetChat()
   historyOpen.value = false
+}
+
+// ─── Session rename (inline edit) ─────────────────────────────
+const editingSessionId = ref(null)
+const editingTitle = ref('')
+const renamInputEl = ref(null)
+
+function startRename(s) {
+  editingSessionId.value = s.id
+  editingTitle.value = s.title || ''
+  nextTick(() => {
+    // Focus the input. `renamInputEl` is a template ref inside v-for,
+    // so Vue makes it an array of elements.
+    const els = renamInputEl.value
+    const el = Array.isArray(els) ? els[0] : els
+    if (el && el.focus) el.focus()
+  })
+}
+
+function cancelRename() {
+  editingSessionId.value = null
+  editingTitle.value = ''
+}
+
+async function saveRename(s) {
+  const newTitle = editingTitle.value.trim()
+  editingSessionId.value = null
+  editingTitle.value = ''
+  if (!newTitle || newTitle === s.title) return
+  try {
+    const resp = await fetch(`/api/chat/sessions/${encodeURIComponent(s.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: newTitle }),
+    })
+    if (!resp.ok) {
+      ElMessage.error('重命名失败')
+      return
+    }
+    // Update local state
+    s.title = newTitle
+    if (s.id === sessionId.value) sessionTitle.value = newTitle
+  } catch (_) {
+    ElMessage.error('重命名失败')
+  }
+}
+
+// ─── Cross-session search ─────────────────────────────────────
+const searchQuery = ref('')
+const searchResults = ref(null)  // null = not searching; array = showing results
+let searchDebounce = null
+
+function doSearch() {
+  const q = searchQuery.value.trim()
+  if (!q) {
+    searchResults.value = null
+    return
+  }
+  clearTimeout(searchDebounce)
+  searchDebounce = setTimeout(async () => {
+    try {
+      const resp = await fetch(`/api/chat/search?q=${encodeURIComponent(q)}&limit=20`)
+      if (!resp.ok) { searchResults.value = []; return }
+      searchResults.value = await resp.json()
+    } catch (_) {
+      searchResults.value = []
+    }
+  }, 300)
+}
+
+function highlightSnippet(snippet, keyword) {
+  if (!snippet || !keyword) return snippet || ''
+  const esc = (s) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
+  const escaped = esc(snippet)
+  const kwEscaped = esc(keyword)
+  const re = new RegExp(kwEscaped.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+  return escaped.replace(re, '<mark>$&</mark>')
+}
+
+function pickSearchResult(r) {
+  pickSession({ id: r.session_id, title: r.session_title })
 }
 
 // Turn a "2026-04-15 10:23:45" timestamp from sqlite into "5 分钟前" etc.
@@ -621,6 +796,12 @@ function renderMd(md) {
   const linkify = (s) =>
     s.replace(DATE_RE, '<a class="citation" href="#/my-logs?date=$1">$1</a>')
      .replace(ISSUE_RE, '<a class="citation" href="#/issues?key=$1">$1</a>')
+  // Auto-link plain URLs (https://...) — applied in the same safe zone as
+  // citation linkify (i.e. outside inline code spans).
+  const URL_RE = /\bhttps?:\/\/[^\s<)\]]+/g
+  const autoLinkUrls = (s) =>
+    s.replace(URL_RE, (url) => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`)
+
   const inline = (s) => {
     const escaped = esc(s)
     // Split by backtick-delimited spans so we don't linkify citations that
@@ -630,7 +811,7 @@ function renderMd(md) {
       if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
         return '<code>' + part.slice(1, -1) + '</code>'
       }
-      return linkify(part)
+      return autoLinkUrls(linkify(part))
     }).join('')
     return rebuilt.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
   }
@@ -667,18 +848,47 @@ function renderMd(md) {
     i++
   }
 
+  // Helper: detect if a line is a markdown table row (| col | col |)
+  const isTableRow = (line) => /^\|(.+)\|$/.test(line.trim())
+  const isSeparator = (line) => /^\|[\s:_-]+(\|[\s:_-]+)*\|$/.test(line.trim())
+  const splitCells = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim())
+
   let out = ''
   let inList = false
   const flushList = () => { if (inList) { out += '</ul>'; inList = false } }
-  for (const tok of tokens) {
+  // Collect consecutive table-line tokens into a group, then render.
+  let ti = 0
+  while (ti < tokens.length) {
+    const tok = tokens[ti]
     if (tok.type === 'code') {
       flushList()
       const cls = tok.lang ? ' class="language-' + esc(tok.lang) + '"' : ''
       const openAttr = tok.closed ? '' : ' data-open="1"'
       out += '<pre' + openAttr + '><code' + cls + '>' + esc(tok.body) + '</code></pre>'
+      ti++
       continue
     }
     const line = tok.text.trimEnd()
+    // Check for start of a markdown table (header row followed by separator)
+    if (tok.type === 'line' && isTableRow(line) &&
+        ti + 1 < tokens.length && tokens[ti + 1].type === 'line' &&
+        isSeparator(tokens[ti + 1].text.trimEnd())) {
+      flushList()
+      const headerCells = splitCells(line)
+      out += '<table><thead><tr>'
+      for (const c of headerCells) out += '<th>' + inline(c) + '</th>'
+      out += '</tr></thead><tbody>'
+      ti += 2  // skip header + separator
+      while (ti < tokens.length && tokens[ti].type === 'line' && isTableRow(tokens[ti].text.trimEnd())) {
+        const cells = splitCells(tokens[ti].text.trimEnd())
+        out += '<tr>'
+        for (const c of cells) out += '<td>' + inline(c) + '</td>'
+        out += '</tr>'
+        ti++
+      }
+      out += '</tbody></table>'
+      continue
+    }
     if (/^###\s+/.test(line)) {
       flushList()
       out += '<h4>' + inline(line.replace(/^###\s+/, '')) + '</h4>'
@@ -691,6 +901,7 @@ function renderMd(md) {
       flushList()
       out += inline(line) + '<br/>'
     }
+    ti++
   }
   if (inList) out += '</ul>'
   return out
@@ -800,12 +1011,14 @@ async function restoreSession() {
     if (!Array.isArray(sessions) || sessions.length === 0) return
 
     const latest = sessions[0]  // sorted by updated_at DESC on the server
-    const msgsResp = await fetch(`/api/chat/sessions/${encodeURIComponent(latest.id)}/messages`)
+    const msgsResp = await fetch(`/api/chat/sessions/${encodeURIComponent(latest.id)}/messages?limit=${MSG_PAGE}`)
     if (!msgsResp.ok) return
-    const rows = await msgsResp.json()
+    const body = await msgsResp.json()
+    const rows = body.messages || []
     if (!rows.length) return
 
     sessionId.value = latest.id
+    msgTotal.value = body.total || 0
     history.value = rows.map(r => ({ role: r.role, text: r.text }))
     scrollToBottom()
   } catch (_) {
@@ -1225,6 +1438,108 @@ onMounted(async () => {
   opacity: 1 !important;
   background: rgba(209, 69, 59, 0.1);
   color: var(--danger);
+}
+
+/* Table styling inside AI bubbles */
+.bubble :deep(table) {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 13px;
+  width: 100%;
+}
+.bubble :deep(th),
+.bubble :deep(td) {
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  text-align: left;
+}
+.bubble :deep(th) {
+  background: var(--surface);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* History search bar */
+.history-search-bar {
+  padding: 0 0 10px;
+}
+.history-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+  font-size: 13px;
+  color: var(--ink);
+  outline: none;
+  font-family: inherit;
+}
+.history-search-input:focus {
+  border-color: var(--ink);
+}
+
+/* Search result snippet */
+.history-snippet {
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin-top: 4px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.history-snippet :deep(mark) {
+  background: rgba(255, 200, 0, 0.35);
+  color: inherit;
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+/* Inline rename input */
+.history-title-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  font-size: 13.5px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--ink);
+  outline: none;
+}
+.history-title-input:focus {
+  border-color: var(--ink);
+}
+
+/* Load more link at top of message log */
+.load-more-bar {
+  text-align: center;
+  padding: 8px 0;
+}
+.load-more-link {
+  font-size: 13px;
+  color: var(--ink-muted);
+  text-decoration: none;
+  cursor: pointer;
+}
+.load-more-link:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+/* Auto-linked URLs inside AI bubbles */
+.bubble :deep(a:not(.citation)) {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+}
+.bubble :deep(a:not(.citation):hover) {
+  text-decoration-color: var(--ink);
 }
 
 @media (max-width: 900px) {

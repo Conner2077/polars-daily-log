@@ -264,20 +264,83 @@ async def get_session(session_id: str, request: Request):
     return row
 
 
+class RenameSessionRequest(BaseModel):
+    title: str
+
+
+@router.patch("/chat/sessions/{session_id}")
+async def rename_session(session_id: str, body: RenameSessionRequest, request: Request):
+    db = request.app.state.db
+    row = await db.fetch_one(
+        "SELECT id FROM chat_sessions WHERE id = ?", (session_id,)
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="session not found")
+    new_title = body.title.strip()[:SESSION_TITLE_MAX] if body.title else ""
+    await db.execute(
+        "UPDATE chat_sessions SET title = ? WHERE id = ?",
+        (new_title, session_id),
+    )
+    updated = await db.fetch_one(
+        "SELECT id, title, created_at, updated_at FROM chat_sessions WHERE id = ?",
+        (session_id,),
+    )
+    return updated
+
+
+@router.get("/chat/search")
+async def search_chat(request: Request, q: str = "", limit: int = 20):
+    """Search across all AI chat messages. Returns snippets with session context."""
+    db = request.app.state.db
+    if not q.strip():
+        return []
+    keyword = q.strip()
+    rows = await db.fetch_all(
+        "SELECT m.session_id, s.title AS session_title, m.role, m.text, m.created_at "
+        "FROM chat_messages m "
+        "JOIN chat_sessions s ON s.id = m.session_id "
+        "WHERE m.role = 'ai' AND m.text LIKE ? "
+        "ORDER BY m.created_at DESC LIMIT ?",
+        (f"%{keyword}%", max(1, min(limit, 100))),
+    )
+    results = []
+    for r in rows:
+        text = r["text"] or ""
+        snippet = _snippet_around(text, keyword, max_len=120)
+        results.append({
+            "session_id": r["session_id"],
+            "session_title": r["session_title"],
+            "role": r["role"],
+            "text_snippet": snippet,
+            "created_at": r["created_at"],
+        })
+    return results
+
+
 @router.get("/chat/sessions/{session_id}/messages")
-async def get_session_messages(session_id: str, request: Request):
+async def get_session_messages(
+    session_id: str,
+    request: Request,
+    offset: int = 0,
+    limit: int = 50,
+):
     db = request.app.state.db
     session = await db.fetch_one(
         "SELECT id FROM chat_sessions WHERE id = ?", (session_id,)
     )
     if not session:
         raise HTTPException(status_code=404, detail="session not found")
-    rows = await db.fetch_all(
-        "SELECT role, text, created_at FROM chat_messages "
-        "WHERE session_id = ? ORDER BY id ASC",
+    total_row = await db.fetch_one(
+        "SELECT COUNT(*) AS c FROM chat_messages WHERE session_id = ?",
         (session_id,),
     )
-    return rows
+    total = int(total_row["c"]) if total_row else 0
+    rows = await db.fetch_all(
+        "SELECT role, text, created_at FROM chat_messages "
+        "WHERE session_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+        (session_id, max(1, limit), max(0, offset)),
+    )
+    return {"messages": rows, "total": total}
 
 
 @router.delete("/chat/sessions/{session_id}", status_code=204)
@@ -709,6 +772,25 @@ async def _compute_suggestions(db, today: date) -> list[str]:
         seen.add(s)
         deduped.append(s)
     return deduped[:5]
+
+
+def _snippet_around(text: str, keyword: str, max_len: int = 120) -> str:
+    """Return a substring of *text* centred on the first occurrence of
+    *keyword*, truncated to *max_len* chars with ellipsis markers."""
+    lower = text.lower()
+    kw_lower = keyword.lower()
+    idx = lower.find(kw_lower)
+    if idx < 0:
+        return text[:max_len]
+    half = max_len // 2
+    start = max(0, idx - half)
+    end = min(len(text), start + max_len)
+    snippet = text[start:end]
+    if start > 0:
+        snippet = "…" + snippet
+    if end < len(text):
+        snippet = snippet + "…"
+    return snippet
 
 
 def _sse(payload: dict) -> str:
