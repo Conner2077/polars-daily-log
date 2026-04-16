@@ -222,24 +222,27 @@ class Application:
         gen_hour, gen_minute = map(int, self.config.scheduler.trigger_time.split(":"))
 
         async def daily_generate_job():
-            print("daily_generate triggered")
-            engine = get_llm_engine(self.config.llm)
-            workflow = DailyWorkflow(
-                self.db,
-                engine,
-                self.config.auto_approve,
-                activity_summarizer=self._activity_summarizer,
-            )
-            await workflow.run_daily_summary()
+            print("[Scheduler] daily_generate triggered")
+            try:
+                engine = get_llm_engine(self.config.llm)
+                workflow = DailyWorkflow(
+                    self.db,
+                    engine,
+                    self.config.auto_approve,
+                    activity_summarizer=self._activity_summarizer,
+                )
+                drafts = await workflow.run_daily_summary()
+                print(f"[Scheduler] daily_generate completed: {len(drafts)} draft(s)")
 
-            # Index today's worklogs + commits for search
-            emb_engine = get_embedding_engine(self.config.llm, self.config.embedding)
-            if emb_engine:
-                indexer = Indexer(self.db, emb_engine)
-                today = datetime.now().strftime("%Y-%m-%d")
-                await indexer.index_worklogs(today)
-                await indexer.index_commits(today)
-            print("daily_generate completed")
+                # Index today's worklogs + commits for search
+                emb_engine = get_embedding_engine(self.config.llm, self.config.embedding)
+                if emb_engine:
+                    indexer = Indexer(self.db, emb_engine)
+                    today = datetime.now().strftime("%Y-%m-%d")
+                    await indexer.index_worklogs(today)
+                    await indexer.index_commits(today)
+            except Exception as e:
+                print(f"[Scheduler] daily_generate FAILED: {type(e).__name__}: {e}")
 
         self.scheduler.add_job(
             daily_generate_job, "cron", hour=gen_hour, minute=gen_minute,
@@ -251,17 +254,20 @@ class Application:
             approve_hour, approve_minute = map(int, self.config.auto_approve.trigger_time.split(":"))
 
             async def auto_approve_job():
-                print("auto_approve triggered")
-                engine = get_llm_engine(self.config.llm)
-                workflow = DailyWorkflow(
-                    self.db,
-                    engine,
-                    self.config.auto_approve,
-                    activity_summarizer=self._activity_summarizer,
-                )
-                today = datetime.now().strftime("%Y-%m-%d")
-                await workflow.auto_approve_and_submit(today)
-                print("auto_approve completed")
+                print("[Scheduler] auto_approve triggered")
+                try:
+                    engine = get_llm_engine(self.config.llm)
+                    workflow = DailyWorkflow(
+                        self.db,
+                        engine,
+                        self.config.auto_approve,
+                        activity_summarizer=self._activity_summarizer,
+                    )
+                    today = datetime.now().strftime("%Y-%m-%d")
+                    await workflow.auto_approve_and_submit(today)
+                    print("[Scheduler] auto_approve completed")
+                except Exception as e:
+                    print(f"[Scheduler] auto_approve FAILED: {type(e).__name__}: {e}")
 
             self.scheduler.add_job(
                 auto_approve_job, "cron", hour=approve_hour, minute=approve_minute,
