@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.3] — 2026-04-17
+
+Hotfix: Windows 安装崩溃 + CI 修复。
+
+### Fixed
+- **PowerShell 窗口闪退**：install.ps1 / bootstrap.ps1 用 try/catch/finally 包裹 Main，异常时显示错误信息 + "Press Enter to exit" 保持窗口
+- **Windows CI 32 个 bash 测试误跑**：test_install_sh.py 加 skipif Windows，bash 测试只在 macOS/Linux 跑
+
+---
+
 ## [0.5.2] — 2026-04-17
 
 安装脚本全面修复 + Windows 一键安装。
