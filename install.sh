@@ -402,9 +402,12 @@ cfg['name'] = sys.argv[2]
 with open('$coll_dest', 'w') as f:
     yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
 " "$server_url" "$name" 2>/dev/null || {
-                # Fallback: sed if pyyaml not available yet (rare — pip step ran first)
-                sed -e "s|^server_url:.*|server_url: \"$server_url\"|" \
-                    -e "s|^name:.*|name: \"$name\"|" \
+                # Fallback: sed if pyyaml not available yet (rare — pip step ran first).
+                # Escape & and \ in values to prevent sed replacement injection.
+                local esc_url; esc_url="$(printf '%s' "$server_url" | sed 's/[&\\/]/\\&/g')"
+                local esc_name; esc_name="$(printf '%s' "$name" | sed 's/[&\\/]/\\&/g')"
+                sed -e "s|^server_url:.*|server_url: \"$esc_url\"|" \
+                    -e "s|^name:.*|name: \"$esc_name\"|" \
                     "$INSTALL_DIR/collector.yaml.example" > "$coll_dest"
             }
             ok "Created collector.yaml (server=$server_url, name=$name)"
