@@ -300,6 +300,69 @@
       </div>
     </div>
 
+    <!-- Scheduler Runs Tab -->
+    <div v-show="activeTab === 'scheduler-runs'" class="tab-content">
+      <div class="settings-card">
+        <div class="card-head-row">
+          <div>
+            <h3 class="card-title">运行记录</h3>
+            <p class="card-description">自动触发和补跑的运行情况。每次定时/补跑生成都会记录一条。</p>
+          </div>
+          <el-button size="small" round @click="loadSchedulerRuns">刷新</el-button>
+        </div>
+
+        <div class="runs-filters" style="margin-bottom: 16px; display: flex; gap: 8px; align-items: center;">
+          <el-select v-model="runsFilterScope" style="width: 140px" clearable placeholder="全部范围" size="small" @change="loadSchedulerRuns">
+            <el-option v-for="s in scopesList" :key="s.name" :label="s.display_name" :value="s.name" />
+          </el-select>
+          <el-select v-model="runsFilterStatus" style="width: 120px" clearable placeholder="全部状态" size="small" @change="loadSchedulerRuns">
+            <el-option label="成功" value="success" />
+            <el-option label="失败" value="failed" />
+          </el-select>
+        </div>
+
+        <el-empty v-if="schedulerRuns.length === 0" description="暂无运行记录" />
+        <el-table v-else :data="schedulerRuns" style="width: 100%" size="small">
+          <el-table-column label="时间" width="170">
+            <template #default="{ row }">
+              <span class="cell-mono">{{ formatRunTime(row.created_at) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="范围" width="100">
+            <template #default="{ row }">{{ scopeDisplayName(row.scope_name) }}</template>
+          </el-table-column>
+          <el-table-column label="触发" width="80">
+            <template #default="{ row }">
+              <el-tag :type="row.trigger_type === 'catchup' ? 'warning' : 'info'" size="small">
+                {{ row.trigger_type === 'catchup' ? '补跑' : '定时' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="日期" width="110" prop="target_date" />
+          <el-table-column label="状态" width="80">
+            <template #default="{ row }">
+              <el-tag :type="row.status === 'success' ? 'success' : 'danger'" size="small">
+                {{ row.status === 'success' ? '成功' : '失败' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="总结数" width="80" prop="summaries_created" />
+          <el-table-column label="耗时" width="100">
+            <template #default="{ row }">
+              <span v-if="row.duration_ms != null" class="cell-mono">{{ (row.duration_ms / 1000).toFixed(1) }}s</span>
+              <span v-else style="color:#999">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="错误信息" min-width="200">
+            <template #default="{ row }">
+              <span v-if="row.error" style="color: var(--el-color-danger); font-size: 12px">{{ row.error }}</span>
+              <span v-else style="color:#999">—</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </div>
+
     <!-- Collectors Tab -->
     <div v-show="activeTab === 'collectors'" class="tab-content">
       <div class="settings-card">
@@ -456,9 +519,9 @@
     <!-- Scopes & Outputs Tab -->
     <div v-show="activeTab === 'scopes'" class="tab-content">
       <div class="settings-card">
-        <h3 class="card-title">总结类型管理</h3>
+        <h3 class="card-title">总结周期管理</h3>
         <p class="card-description">
-          每个触发范围（日/周/月）下可挂载多个输出。每个输出有独立的生成方式、推送平台和 Prompt 模板。内置类型可修改配置但不能删除。
+          每个总结周期（日/周/月）下可挂载多个输出。每个输出有独立的生成方式、推送平台和 Prompt 模板。内置周期可修改配置但不能删除。
         </p>
 
         <div v-for="scope in scopesList" :key="scope.name" class="scope-block">
@@ -473,7 +536,7 @@
               </span>
             </div>
             <div class="scope-header-right">
-              <el-button size="small" round @click="editScope(scope)">编辑范围</el-button>
+              <el-button size="small" round @click="editScope(scope)">编辑周期</el-button>
               <el-button size="small" round @click="openAddOutput(scope.name)">+ 输出</el-button>
               <el-popconfirm
                 v-if="!scope.is_builtin"
@@ -539,12 +602,12 @@
         </div>
 
         <div style="margin-top: 16px">
-          <el-button round @click="openAddScope">+ 新增触发范围</el-button>
+          <el-button round @click="openAddScope">+ 新增周期</el-button>
         </div>
       </div>
 
       <!-- Scope edit dialog -->
-      <el-dialog v-model="scopeDialogVisible" :title="scopeEditMode ? '编辑触发范围' : '新增触发范围'" width="480px" :close-on-click-modal="false">
+      <el-dialog v-model="scopeDialogVisible" :title="scopeEditMode ? '编辑周期' : '新增周期'" width="480px" :close-on-click-modal="false">
         <el-form label-position="top" class="settings-form">
           <el-form-item v-if="!scopeEditMode" label="标识名（唯一，英文）">
             <el-input v-model="scopeForm.name" placeholder="e.g. sprint" />
@@ -557,7 +620,7 @@
               <el-option label="按天" value="day" />
               <el-option label="按周" value="week" />
               <el-option label="按月" value="month" />
-              <el-option label="自定义" value="custom" />
+              <el-option label="按季" value="quarter" />
             </el-select>
           </el-form-item>
           <el-form-item label="生成方式">
@@ -580,7 +643,7 @@
               <el-option label="周日" value="sunday" />
             </el-select>
           </el-form-item>
-          <el-form-item v-if="scopeForm.auto_generate && scopeForm.scope_type === 'month'" label="触发日期（每月几号）">
+          <el-form-item v-if="scopeForm.auto_generate && (scopeForm.scope_type === 'month' || scopeForm.scope_type === 'quarter')" label="触发日期（每月/季首月几号）">
             <el-input-number v-model="scopeForm.trigger_day_of_month" :min="1" :max="28" />
           </el-form-item>
         </el-form>
@@ -796,7 +859,8 @@ const tabs = [
   { name: 'prompts', label: 'Prompt 模板' },
   { name: 'collectors', label: '数据采集节点' },
   { name: 'recycle', label: '回收站' },
-  { name: 'scopes', label: '总结类型' },
+  { name: 'scopes', label: '总结周期' },
+  { name: 'scheduler-runs', label: '运行记录' },
   { name: 'updates', label: '自动更新' },
 ]
 
@@ -854,7 +918,7 @@ const outputForm = ref({
 })
 
 function scopeTypeLabel(t) {
-  return { day: '按天', week: '按周', month: '按月', custom: '自定义' }[t] || t
+  return { day: '按天', week: '按周', month: '按月', quarter: '按季', custom: '自定义' }[t] || t
 }
 
 function publisherDisplayName(name) {
@@ -923,6 +987,7 @@ async function saveScope() {
     const rule = { time: f.trigger_time || '18:00' }
     if (f.scope_type === 'week') rule.day = f.trigger_day
     if (f.scope_type === 'month') rule.day_of_month = f.trigger_day_of_month
+    if (f.scope_type === 'quarter') rule.day_of_month = f.trigger_day_of_month
     scheduleRule = JSON.stringify(rule)
   }
   try {
@@ -1047,6 +1112,35 @@ async function deleteScopeOutput(outputId) {
   } catch (e) {
     ElMessage.error(e?.response?.data?.detail || '删除失败')
   }
+}
+
+// ─── Scheduler Runs ──────────────────────────────────────────────────
+const schedulerRuns = ref([])
+const runsFilterScope = ref('')
+const runsFilterStatus = ref('')
+
+async function loadSchedulerRuns() {
+  try {
+    const params = { limit: 50 }
+    if (runsFilterScope.value) params.scope_name = runsFilterScope.value
+    if (runsFilterStatus.value) params.status = runsFilterStatus.value
+    const r = await api.getSchedulerRuns(params)
+    schedulerRuns.value = r.data
+  } catch { schedulerRuns.value = [] }
+}
+
+function scopeDisplayName(name) {
+  const scope = scopesList.value.find(s => s.name === name)
+  return scope ? scope.display_name : name
+}
+
+function formatRunTime(s) {
+  if (!s) return ''
+  const iso = s.includes('T') ? s : s.replace(' ', 'T') + 'Z'
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return s
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 // ─── Self-update state ────────────────────────────────────────────────
@@ -1382,6 +1476,7 @@ onMounted(async () => {
   loadRecycled()
   loadCollectors()
   loadScopes()
+  loadSchedulerRuns()
   // Updates: cached check is cheap; backups list is local file scan.
   checkUpdate(false)
   loadBackups()
@@ -1929,7 +2024,7 @@ onBeforeRouteLeave((to, from, next) => {
   word-break: break-word;
 }
 
-/* ───── Scope blocks (总结类型 tab) ───── */
+/* ───── Scope blocks (总结周期 tab) ───── */
 .scope-block {
   margin-bottom: 24px;
   padding-bottom: 20px;

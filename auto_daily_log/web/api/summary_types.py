@@ -62,7 +62,17 @@ async def list_summary_types(request: Request):
     rows = await db.fetch_all(
         "SELECT * FROM summary_types ORDER BY is_builtin DESC, name"
     )
-    return [dict(r) for r in rows]
+    import json as _json
+    result = []
+    for r in rows:
+        d = dict(r)
+        # Add derived scope_type for frontend convenience (avoids JSON.parse in UI)
+        try:
+            d["scope_type"] = _json.loads(d.get("scope_rule") or "{}").get("type", "day")
+        except (_json.JSONDecodeError, TypeError):
+            d["scope_type"] = "day"
+        result.append(d)
+    return result
 
 
 @router.post("/summary-types", status_code=201)
