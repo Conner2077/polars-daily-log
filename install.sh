@@ -299,17 +299,22 @@ detect_install_mode() {
 }
 
 # ─── Install Python Dependencies ─────────────────────────────────────
+# Use Aliyun PyPI mirror by default for faster downloads in China.
+# Override via env: PDL_PIP_INDEX_URL=https://your.mirror/simple/
+PIP_MIRROR="${PDL_PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
+
 install_python_deps() {
     header "5. Python Dependencies"
 
-    pip install --upgrade pip -q 2>/dev/null
+    info "PyPI mirror: $PIP_MIRROR"
+    pip install --upgrade pip -q -i "$PIP_MIRROR" --trusted-host "$(echo "$PIP_MIRROR" | sed -E 's|https?://([^/]+).*|\1|')" 2>/dev/null
     if [ "$INSTALL_MODE" = "release" ]; then
         info "Installing from bundled wheel: $(basename "$WHEEL_PATH")"
-        pip install "$WHEEL_PATH[$PLATFORM]" -q 2>&1 | tail -3
+        pip install "$WHEEL_PATH[$PLATFORM]" -q -i "$PIP_MIRROR" --trusted-host "$(echo "$PIP_MIRROR" | sed -E 's|https?://([^/]+).*|\1|')" 2>&1 | tail -3
         ok "Installed auto-daily-log[$PLATFORM] (release mode)"
     else
         info "Installing editable source + $PLATFORM dependencies..."
-        pip install -e ".[$PLATFORM]" -q 2>&1 | tail -3
+        pip install -e ".[$PLATFORM]" -q -i "$PIP_MIRROR" --trusted-host "$(echo "$PIP_MIRROR" | sed -E 's|https?://([^/]+).*|\1|')" 2>&1 | tail -3
         ok "Installed auto-daily-log[$PLATFORM] (dev mode)"
     fi
 }
