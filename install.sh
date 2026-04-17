@@ -397,6 +397,7 @@ setup_data() {
             fi
 
             # Write collector.yaml via Python to avoid sed escaping pitfalls.
+            local yaml_ok=0
             python3 -c "
 import sys, yaml
 with open('$INSTALL_DIR/collector.yaml.example') as f:
@@ -405,16 +406,20 @@ cfg['server_url'] = sys.argv[1]
 cfg['name'] = sys.argv[2]
 with open('$coll_dest', 'w') as f:
     yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
-" "$server_url" "$name" 2>/dev/null || {
-                # Fallback: sed if pyyaml not available yet (rare — pip step ran first).
-                # Escape & and \ in values to prevent sed replacement injection.
+" "$server_url" "$name" 2>&1 || {
+                # Fallback: sed if pyyaml not available.
+                warn "Python yaml failed, trying sed fallback..."
                 local esc_url; esc_url="$(printf '%s' "$server_url" | sed 's/[&\\/]/\\&/g')"
                 local esc_name; esc_name="$(printf '%s' "$name" | sed 's/[&\\/]/\\&/g')"
                 sed -e "s|^server_url:.*|server_url: \"$esc_url\"|" \
                     -e "s|^name:.*|name: \"$esc_name\"|" \
-                    "$INSTALL_DIR/collector.yaml.example" > "$coll_dest"
+                    "$INSTALL_DIR/collector.yaml.example" > "$coll_dest" 2>&1
             }
-            ok "Created collector.yaml (server=$server_url, name=$name)"
+            if [[ -f "$coll_dest" ]]; then
+                ok "Created collector.yaml (server=$server_url, name=$name)"
+            else
+                fail "collector.yaml generation failed — create it manually from collector.yaml.example"
+            fi
         else
             warn "collector.yaml.example not found — cannot auto-generate collector.yaml"
         fi
