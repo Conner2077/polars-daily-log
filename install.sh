@@ -47,10 +47,14 @@ header() { echo -e "\n${BOLD}$1${NC}"; }
 #   Sets REPLY to user input or the default.
 tty_read() {
     local prompt="$1" default="${2:-}"
-    if [[ -r /dev/tty ]]; then
+    REPLY=""
+    if [[ -t 0 ]]; then
+        # stdin is already a tty (e.g., bootstrap redirected < /dev/tty,
+        # or user ran install.sh directly) — just read normally.
+        read -rp "$prompt" REPLY || REPLY=""
+    elif [[ -e /dev/tty ]]; then
+        # stdin is a pipe but /dev/tty exists — try it.
         read -rp "$prompt" REPLY < /dev/tty 2>/dev/null || REPLY=""
-    else
-        REPLY=""
     fi
     [[ -z "$REPLY" ]] && REPLY="$default"
 }

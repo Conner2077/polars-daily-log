@@ -131,10 +131,26 @@ run_installer() {
     [ -n "${PDL_COLLECTOR_NAME:-}" ] && env_prefix+=("PDL_COLLECTOR_NAME=$PDL_COLLECTOR_NAME")
 
     cd "$INSTALL_DIR"
+    # Key: when running via `curl | bash`, bash's stdin is the pipe (not the
+    # terminal). Redirect install.sh's stdin from /dev/tty so interactive
+    # prompts (role selection, passphrase, etc.) can read user input.
+    # If /dev/tty is unavailable (CI, Docker), install.sh's tty_read falls
+    # back to defaults — no harm done.
+    local tty_redirect=""
+    [[ -e /dev/tty ]] && tty_redirect="/dev/tty"
+
     if [ "${#env_prefix[@]}" -gt 0 ]; then
-        env "${env_prefix[@]}" bash install.sh
+        if [[ -n "$tty_redirect" ]]; then
+            env "${env_prefix[@]}" bash install.sh < "$tty_redirect"
+        else
+            env "${env_prefix[@]}" bash install.sh
+        fi
     else
-        bash install.sh
+        if [[ -n "$tty_redirect" ]]; then
+            bash install.sh < "$tty_redirect"
+        else
+            bash install.sh
+        fi
     fi
 }
 
