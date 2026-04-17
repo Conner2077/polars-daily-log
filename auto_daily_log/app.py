@@ -231,7 +231,7 @@ class Application:
 
                 # Activity backfill before daily generation
                 scope = await self.db.fetch_one(
-                    "SELECT * FROM time_scopes WHERE name = ?", (scope_name,)
+                    "SELECT * FROM summary_types WHERE name = ?", (scope_name,)
                 )
                 if scope and scope["scope_type"] == "day" and self._activity_summarizer:
                     today = datetime.now().strftime("%Y-%m-%d")
@@ -281,7 +281,7 @@ class Application:
 
         async def _register_scope_jobs():
             scopes = await self.db.fetch_all(
-                "SELECT * FROM time_scopes WHERE schedule_rule IS NOT NULL AND enabled = 1"
+                "SELECT * FROM summary_types WHERE schedule_rule IS NOT NULL AND enabled = 1"
             )
             job_ids = []
             for scope in scopes:
@@ -369,7 +369,7 @@ class Application:
         today = now.strftime("%Y-%m-%d")
 
         scopes = await self.db.fetch_all(
-            "SELECT * FROM time_scopes WHERE schedule_rule IS NOT NULL AND enabled = 1"
+            "SELECT * FROM summary_types WHERE schedule_rule IS NOT NULL AND enabled = 1"
         )
         for scope in scopes:
             try:
@@ -381,6 +381,18 @@ class Application:
             if "time" in rule:
                 parts = rule["time"].split(":")
                 hour, minute = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+
+            # Settings UI override (same logic as _register_scope_jobs)
+            if scope["name"] == "daily":
+                override = await self.db.fetch_one(
+                    "SELECT value FROM settings WHERE key = 'scheduler_trigger_time'"
+                )
+                if override and override.get("value"):
+                    try:
+                        oh, om = override["value"].split(":")
+                        hour, minute = int(oh), int(om)
+                    except (ValueError, AttributeError):
+                        pass
 
             trigger_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             if now <= trigger_time:
