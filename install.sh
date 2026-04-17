@@ -42,7 +42,7 @@ resolve_role() {
             echo "  3) both        — server AND collector on this machine"
             local choice=""
             while [[ ! "$choice" =~ ^[123]$ ]]; do
-                read -rp "  Choose [1/2/3]: " choice
+                read -rp "  Choose [1/2/3]: " choice < /dev/tty
             done
             case "$choice" in
                 1) ROLE="server" ;;
@@ -211,7 +211,7 @@ install_sys_deps() {
 
     echo ""
     info "Will install: ${all_missing[*]}"
-    read -rp "  Proceed? [Y/n] " answer
+    read -rp "  Proceed? [Y/n] " answer < /dev/tty
     answer="${answer:-Y}"
     if [[ "$answer" =~ ^[Yy] ]]; then
         # Map package names per distro
@@ -357,13 +357,13 @@ setup_data() {
         local server_url="$SERVER_URL_INPUT"
         local name="$COLLECTOR_NAME_INPUT"
         if [[ -z "$server_url" ]]; then
-            read -rp "  Server URL [$default_url]: " server_url
+            read -rp "  Server URL [$default_url]: " server_url < /dev/tty
             server_url="${server_url:-$default_url}"
         else
             info "Server URL: $server_url (from PDL_SERVER_URL)"
         fi
         if [[ -z "$name" ]]; then
-            read -rp "  Collector display name [$default_name]: " name
+            read -rp "  Collector display name [$default_name]: " name < /dev/tty
             name="${name:-$default_name}"
         else
             info "Collector name: $name (from PDL_COLLECTOR_NAME)"
@@ -447,7 +447,7 @@ build_frontend() {
 
     if [ -d "$frontend_dir/dist" ]; then
         ok "Frontend already built (dist/ exists)"
-        read -rp "  Rebuild? [y/N] " answer
+        read -rp "  Rebuild? [y/N] " answer < /dev/tty
         answer="${answer:-N}"
         if [[ ! "$answer" =~ ^[Yy] ]]; then
             return

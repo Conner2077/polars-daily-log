@@ -81,8 +81,9 @@ download_and_extract() {
 
     local tarball="polars-daily-log-${VERSION}.tar.gz"
     local url="https://github.com/${REPO}/releases/download/v${VERSION}/${tarball}"
-    local tmp_dir; tmp_dir="$(mktemp -d)"
-    trap 'rm -rf "$tmp_dir"' EXIT
+    _BOOTSTRAP_TMP="$(mktemp -d)"
+    trap 'rm -rf "$_BOOTSTRAP_TMP"' EXIT
+    local tmp_dir="$_BOOTSTRAP_TMP"
 
     info "从 $url 下载..."
     if ! curl -fL --progress-bar "$url" -o "$tmp_dir/$tarball"; then
