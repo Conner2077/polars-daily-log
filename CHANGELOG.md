@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.2] — 2026-04-17
+
+安装脚本全面修复 + Windows 一键安装。
+
+### Added
+- **Windows bootstrap**：`irm .../bootstrap.ps1 | iex` 一行装，和 bash 版对齐
+- **install.sh 28 个分支覆盖测试**：角色/配置/口令/镜像/节号/前端/启动/模式全覆盖
+- **install.ps1 15 个 Windows-only 测试**：CI Windows runner 真跑，macOS/Linux skip
+- **Landing page 版本号动态化**：从 pyproject.toml 读，不再手动改
+
+### Fixed
+- **install.ps1 全面对齐 install.sh**：VERSION 动态化、数据目录创建、builtin LLM 口令解密（Git 自带 openssl）、阿里云 pip 镜像、collector.yaml 用 pyyaml 写、adl.ps1→pdl、安装完自动启动
+- **install.sh sed `&` 注入**：collector URL/name 含特殊字符时 sed 替换炸掉；已转义
+
+---
+
 ## [0.5.1] — 2026-04-17
 
 Hotfix: install.sh 重写，修复 `curl | bash` 全流程。
