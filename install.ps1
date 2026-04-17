@@ -7,6 +7,9 @@
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Mode server
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Mode collector
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Mode both -SkipScheduledTask
+#
+# All interactive prompts use [Console]::ReadLine() / Read-Host which read
+# from the console host, NOT stdin — so piping via `irm ... | iex` works.
 # ────────────────────────────────────────────────────────────────────
 
 [CmdletBinding()]
@@ -19,11 +22,26 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Version = '0.1.0'
 $InstallDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VenvDir = Join-Path $InstallDir '.venv'
+$DataDir = Join-Path $env:USERPROFILE '.auto_daily_log'
 $MinPyMajor = 3
 $MinPyMinor = 9
+
+# Dynamic version: read from VERSION file (release) or pyproject.toml (dev).
+$Version = 'unknown'
+$versionFile = Join-Path $InstallDir 'VERSION'
+$pyprojectFile = Join-Path $InstallDir 'pyproject.toml'
+if (Test-Path $versionFile) {
+    $Version = (Get-Content $versionFile -Raw).Trim()
+} elseif (Test-Path $pyprojectFile) {
+    $m = Select-String -Path $pyprojectFile -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+    if ($m) { $Version = $m.Matches[0].Groups[1].Value }
+}
+
+# PyPI mirror (default aliyun for China; override via $env:PDL_PIP_INDEX_URL)
+$PipMirror = if ($env:PDL_PIP_INDEX_URL) { $env:PDL_PIP_INDEX_URL } else { 'https://mirrors.aliyun.com/pypi/simple/' }
+$PipHost = ([Uri]$PipMirror).Host
 
 function Write-Ok    ($msg) { Write-Host "  " -NoNewline; Write-Host "OK  " -ForegroundColor Green -NoNewline; Write-Host $msg }
 function Write-Warn  ($msg) { Write-Host "  " -NoNewline; Write-Host "!   " -ForegroundColor Yellow -NoNewline; Write-Host $msg }
@@ -37,8 +55,7 @@ $script:InstallCollector = $false
 $script:InstallMode = 'dev'
 $script:WheelPath = $null
 
-# Detect install mode: a release tarball has wheels/auto_daily_log-*.whl;
-# a dev checkout has the pyproject.toml and auto_daily_log/ source dir.
+# Detect install mode
 $wheelDir = Join-Path $InstallDir 'wheels'
 if (Test-Path $wheelDir) {
     $wheels = Get-ChildItem -Path $wheelDir -Filter 'auto_daily_log-*.whl' -ErrorAction SilentlyContinue
@@ -48,19 +65,22 @@ if (Test-Path $wheelDir) {
     }
 }
 
-# ─── 0. Mode selection ─────────────────────────────────────────────
+# ─── 1. Mode selection ─────────────────────────────────────────────
 function Resolve-Mode {
+    Write-Header '1. What are you installing?'
     if ($Mode -eq 'ask') {
-        Write-Header 'Installation mode'
-        Write-Host '  1) server      — central web server + UI (usually one per team)'
-        Write-Host '  2) collector   — activity collector (runs on each user machine)'
-        Write-Host '  3) both        — server AND collector on this machine'
+        Write-Host '  1) server      - central web server + UI'
+        Write-Host '  2) collector   - activity collector (one per machine)'
+        Write-Host '  3) both        - server AND collector on this machine'
         $choice = Read-Host '  Choose [1/2/3]'
         switch ($choice) {
             '1' { $script:InstallServer = $true }
             '2' { $script:InstallCollector = $true }
             '3' { $script:InstallServer = $true; $script:InstallCollector = $true }
-            default { throw "Invalid choice: $choice" }
+            default {
+                Write-Warn "Invalid choice '$choice' - defaulting to 'both'"
+                $script:InstallServer = $true; $script:InstallCollector = $true
+            }
         }
     } else {
         if ($Mode -eq 'server' -or $Mode -eq 'both') { $script:InstallServer = $true }
@@ -72,9 +92,9 @@ function Resolve-Mode {
     Write-Info "Will install: $($summary -join ' + ')"
 }
 
-# ─── 1. Python ─────────────────────────────────────────────────────
+# ─── 2. Python ─────────────────────────────────────────────────────
 function Test-Python {
-    Write-Header '1. Python'
+    Write-Header '2. Python'
 
     if ($SkipPython) {
         Write-Warn 'Skipping Python check (-SkipPython)'
@@ -106,14 +126,14 @@ function Test-Python {
     $script:MissingCritical = $true
 }
 
-# ─── 2. System deps (git, optionally node) ─────────────────────────
+# ─── 3. System deps ───────────────────────────────────────────────
 function Test-SystemDeps {
-    Write-Header '2. System Dependencies'
+    Write-Header '3. System Dependencies'
 
     if (Get-Command git -ErrorAction SilentlyContinue) {
         Write-Ok 'git'
     } else {
-        Write-Fail 'git — required for commit collection'
+        Write-Fail 'git - required for commit collection'
         Write-Info 'Install: winget install Git.Git'
         $script:MissingCritical = $true
     }
@@ -121,20 +141,18 @@ function Test-SystemDeps {
     if ($script:InstallServer -and -not $SkipFrontend) {
         if (Get-Command node -ErrorAction SilentlyContinue) {
             $nodeVer = node --version
-            Write-Ok "Node.js $nodeVer (needed for server frontend build)"
+            Write-Ok "Node.js $nodeVer (needed for dev frontend build)"
         } else {
-            Write-Warn 'Node.js not found — server frontend cannot be built'
-            Write-Info 'Install: winget install OpenJS.NodeJS'
-            Write-Info '(server can still start, but the Web UI will be missing until you build dist/)'
+            Write-Warn 'Node.js not found (ok for release installs; needed for dev builds)'
         }
     }
 
-    Write-Ok 'Windows native APIs (GetForegroundWindow / WinRT OCR via winocr) — built-in'
+    Write-Ok 'Windows native APIs (GetForegroundWindow / WinRT OCR via winocr) - built-in'
 }
 
-# ─── 3. venv ───────────────────────────────────────────────────────
+# ─── 4. venv ───────────────────────────────────────────────────────
 function New-Venv {
-    Write-Header '3. Python Virtual Environment'
+    Write-Header '4. Python Virtual Environment'
 
     if (Test-Path $VenvDir) {
         Write-Ok "Virtual environment exists at $VenvDir"
@@ -152,27 +170,27 @@ function New-Venv {
 
     $script:VenvPython = Join-Path $VenvDir 'Scripts\python.exe'
     $script:VenvPip    = Join-Path $VenvDir 'Scripts\pip.exe'
-    if (-not (Test-Path $script:VenvPython)) { throw "venv python not found: $script:VenvPython" }
+    if (-not (Test-Path $script:VenvPython)) { throw "venv python not found: $($script:VenvPython)" }
     Write-Ok "venv Python: $($script:VenvPython)"
 }
 
-# ─── 4. pip install ─────────────────────────────────────────────────
+# ─── 5. pip install ─────────────────────────────────────────────────
 function Install-PythonDeps {
-    Write-Header '4. Python Dependencies'
+    Write-Header '5. Python Dependencies'
 
-    Write-Info 'Upgrading pip...'
-    & $script:VenvPython -m pip install --upgrade pip -q 2>&1 | Out-Null
+    Write-Info "PyPI mirror: $PipMirror"
+    & $script:VenvPython -m pip install --upgrade pip -q -i $PipMirror --trusted-host $PipHost 2>&1 | Out-Null
 
     if ($script:InstallMode -eq 'release') {
         Write-Info "Installing from bundled wheel: $(Split-Path -Leaf $script:WheelPath)"
-        & $script:VenvPip install "$($script:WheelPath)[windows]" -q
+        & $script:VenvPip install "$($script:WheelPath)[windows]" -q -i $PipMirror --trusted-host $PipHost
         if ($LASTEXITCODE -ne 0) { throw "pip install (wheel) failed" }
         Write-Ok 'Installed auto-daily-log[windows] (release mode)'
     } else {
         Write-Info 'Installing editable source with [windows] extras...'
         Push-Location $InstallDir
         try {
-            & $script:VenvPip install -e '.[windows]' -q
+            & $script:VenvPip install -e '.[windows]' -q -i $PipMirror --trusted-host $PipHost
             if ($LASTEXITCODE -ne 0) { throw "pip install -e failed" }
             Write-Ok 'Installed auto-daily-log[windows] (dev mode)'
         } finally {
@@ -181,12 +199,12 @@ function Install-PythonDeps {
     }
 }
 
-# ─── 5. Frontend build (server mode only) ──────────────────────────
+# ─── 6. Frontend build (server mode only) ──────────────────────────
 function Build-Frontend {
     if (-not $script:InstallServer) { return }
-    Write-Header '5. Frontend'
+    Write-Header '6. Frontend'
     if ($script:InstallMode -eq 'release') {
-        Write-Ok 'Frontend ships inside the wheel — no build needed'
+        Write-Ok 'Frontend ships inside the wheel - no build needed'
         return
     }
     if ($SkipFrontend) { Write-Warn 'Skipped (-SkipFrontend)'; return }
@@ -195,7 +213,6 @@ function Build-Frontend {
     if (-not (Test-Path $feDir)) { Write-Warn 'Frontend dir missing; skipping'; return }
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         Write-Warn 'Node.js not found; skipping frontend build'
-        Write-Info 'Install Node 18+ then run: cd web\frontend; npm install; npm run build'
         return
     }
 
@@ -213,10 +230,19 @@ function Build-Frontend {
     }
 }
 
-# ─── 6. Configs ────────────────────────────────────────────────────
+# ─── 7. Data directory & configs ──────────────────────────────────
 function New-Configs {
-    Write-Header '6. Configuration'
+    Write-Header '7. Data & Config'
 
+    # Data directory
+    if (-not (Test-Path $DataDir)) {
+        New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
+        Write-Ok "Created data directory: $DataDir"
+    } else {
+        Write-Ok "Data directory exists: $DataDir"
+    }
+
+    # Server config
     if ($script:InstallServer) {
         $cfg = Join-Path $InstallDir 'config.yaml'
         $example = Join-Path $InstallDir 'config.yaml.example'
@@ -224,28 +250,56 @@ function New-Configs {
             Write-Ok "config.yaml exists"
         } elseif (Test-Path $example) {
             Copy-Item $example $cfg
-            Write-Ok "Copied config.yaml.example → config.yaml"
+            Write-Ok "Copied config.yaml.example -> config.yaml"
         } else {
-            Write-Warn 'Neither config.yaml nor config.yaml.example found'
+            Write-Warn 'config.yaml.example not found'
         }
     }
 
+    # Collector config (separate block, no early-return that could skip server)
     if ($script:InstallCollector) {
         $cfg = Join-Path $InstallDir 'collector.yaml'
         $example = Join-Path $InstallDir 'collector.yaml.example'
         if (Test-Path $cfg) {
             Write-Ok "collector.yaml exists"
         } elseif (Test-Path $example) {
-            $defaultUrl = if ($script:InstallServer) { 'http://127.0.0.1:8888' } else { 'http://127.0.0.1:8888' }
-            $serverUrl = Read-Host "  Server URL for this collector [$defaultUrl]"
-            if ([string]::IsNullOrWhiteSpace($serverUrl)) { $serverUrl = $defaultUrl }
-            $name = Read-Host "  Collector display name [$env:COMPUTERNAME]"
-            if ([string]::IsNullOrWhiteSpace($name)) { $name = $env:COMPUTERNAME }
+            $defaultUrl = 'http://127.0.0.1:8888'
+            $defaultName = $env:COMPUTERNAME
 
-            $content = Get-Content $example -Raw
-            $content = $content -replace 'server_url: ".*"', "server_url: ""$serverUrl"""
-            $content = $content -replace 'name: ".*"', "name: ""$name"""
-            Set-Content -Path $cfg -Value $content -Encoding UTF8
+            $serverUrl = if ($env:PDL_SERVER_URL) {
+                Write-Info "Server URL: $($env:PDL_SERVER_URL) (from PDL_SERVER_URL)"
+                $env:PDL_SERVER_URL
+            } else {
+                $input = Read-Host "  Server URL [$defaultUrl]"
+                if ([string]::IsNullOrWhiteSpace($input)) { $defaultUrl } else { $input }
+            }
+            $name = if ($env:PDL_COLLECTOR_NAME) {
+                Write-Info "Collector name: $($env:PDL_COLLECTOR_NAME) (from PDL_COLLECTOR_NAME)"
+                $env:PDL_COLLECTOR_NAME
+            } else {
+                $input = Read-Host "  Collector display name [$defaultName]"
+                if ([string]::IsNullOrWhiteSpace($input)) { $defaultName } else { $input }
+            }
+
+            # Use Python yaml to avoid regex escaping pitfalls.
+            try {
+                & $script:VenvPython -c @"
+import sys, yaml
+with open(r'$example') as f:
+    cfg = yaml.safe_load(f)
+cfg['server_url'] = sys.argv[1]
+cfg['name'] = sys.argv[2]
+with open(r'$cfg', 'w') as f:
+    yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+"@ $serverUrl $name 2>$null
+                if ($LASTEXITCODE -ne 0) { throw "yaml fallback" }
+            } catch {
+                # Fallback: literal string replace (not regex)
+                $content = Get-Content $example -Raw
+                $content = $content.Replace('server_url: "http://127.0.0.1:8888"', "server_url: ""$serverUrl""")
+                $content = $content.Replace('name: "My-Mac"', "name: ""$name""")
+                Set-Content -Path $cfg -Value $content -Encoding UTF8
+            }
             Write-Ok "Created collector.yaml (server=$serverUrl, name=$name)"
         } else {
             Write-Warn 'collector.yaml.example missing'
@@ -253,19 +307,71 @@ function New-Configs {
     }
 }
 
-# ─── 7. Scheduled Tasks ─────────────────────────────────────────────
+# ─── 8. Built-in LLM (optional, passphrase-protected) ─────────────
+function Install-BuiltinLLM {
+    if (-not $script:InstallServer) { return }
+    $encFile = Join-Path $InstallDir 'builtin_llm.enc'
+    if (-not (Test-Path $encFile)) { return }
+
+    Write-Header '8. Built-in LLM (optional)'
+
+    # Need openssl — Git for Windows bundles it
+    $opensslCmd = $null
+    $gitDir = (Get-Command git -ErrorAction SilentlyContinue).Source | Split-Path | Split-Path
+    $gitOpenssl = Join-Path $gitDir 'usr\bin\openssl.exe'
+    if (Test-Path $gitOpenssl) {
+        $opensslCmd = $gitOpenssl
+    } elseif (Get-Command openssl -ErrorAction SilentlyContinue) {
+        $opensslCmd = 'openssl'
+    }
+
+    if (-not $opensslCmd) {
+        Write-Warn 'openssl not found (Git for Windows usually provides it) - skipping'
+        return
+    }
+
+    $passphrase = $env:PDL_BUILTIN_PASSPHRASE
+    if (-not $passphrase) {
+        Write-Host '  If the author gave you a passphrase, enter it to auto-configure LLM.'
+        Write-Host '  Press Enter to skip.'
+        $passphrase = Read-Host '  Passphrase'
+    } else {
+        Write-Info 'Using PDL_BUILTIN_PASSPHRASE env var'
+    }
+
+    if ([string]::IsNullOrWhiteSpace($passphrase)) {
+        Write-Info 'Skipped - configure LLM later in Settings page'
+        return
+    }
+
+    $target = Join-Path $DataDir 'builtin.key'
+    try {
+        & $opensslCmd enc -d -aes-256-cbc -pbkdf2 -iter 100000 -base64 `
+            -in $encFile -out $target -pass "pass:$passphrase" 2>$null
+        if ($LASTEXITCODE -ne 0) { throw "decrypt failed" }
+        # Validate JSON
+        & $script:VenvPython -c "import json,sys; json.load(open(sys.argv[1]))" $target 2>$null
+        if ($LASTEXITCODE -ne 0) { throw "invalid json" }
+        Write-Ok "Built-in LLM configured -> $target"
+    } catch {
+        Remove-Item $target -ErrorAction SilentlyContinue
+        Write-Warn 'Wrong passphrase - skipped (re-run install.ps1 to retry)'
+    }
+}
+
+# ─── 9. Scheduled Tasks ───────────────────────────────────────────
 function Register-ScheduledTasks {
     if ($SkipScheduledTask) {
-        Write-Header '7. Auto-Start (Scheduled Tasks)'
+        Write-Header '9. Auto-Start (Scheduled Tasks)'
         Write-Warn 'Skipped (-SkipScheduledTask)'
         return
     }
 
-    Write-Header '7. Auto-Start (Scheduled Tasks)'
+    Write-Header '9. Auto-Start (Scheduled Tasks)'
     $answer = Read-Host "  Register scheduled tasks to auto-start at login? [Y/n]"
     if ($answer -match '^[nN]') { Write-Info 'Skipped'; return }
 
-    $logDir = Join-Path $env:USERPROFILE '.auto_daily_log\logs'
+    $logDir = Join-Path $DataDir 'logs'
     if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
 
     $settings = New-ScheduledTaskSettingsSet `
@@ -303,9 +409,9 @@ function Register-ScheduledTasks {
     }
 }
 
-# ─── 8. Verification ───────────────────────────────────────────────
+# ─── 10. Verification ─────────────────────────────────────────────
 function Invoke-Verify {
-    Write-Header '8. Verification'
+    Write-Header '10. Verification'
 
     $tests = @(
         @{ Name = 'aiosqlite (async DB driver)'; Code = 'import aiosqlite' },
@@ -328,7 +434,7 @@ function Invoke-Verify {
         if ($LASTEXITCODE -eq 0) {
             Write-Ok $t.Name
         } else {
-            Write-Fail "$($t.Name) — run: $($script:VenvPip) install -e .[windows]"
+            Write-Fail "$($t.Name) - run: $($script:VenvPip) install -e .[windows]"
             $importOk = $false
         }
     }
@@ -338,66 +444,62 @@ function Invoke-Verify {
     if ($LASTEXITCODE -eq 0) {
         Write-Ok 'winocr (Windows native OCR)'
     } else {
-        Write-Warn 'winocr unavailable — OCR disabled (ok if monitor.ocr_enabled=false)'
-    }
-
-    # Collector smoke-test: GetForegroundWindow actually works
-    if ($script:InstallCollector) {
-        $smoke = & $script:VenvPython -c "from auto_daily_log_collector.platforms.windows import WindowsAdapter; a=WindowsAdapter(); print(a.get_frontmost_app() or '<no foreground>')"
-        if ($LASTEXITCODE -eq 0) {
-            Write-Ok "WindowsAdapter.get_frontmost_app() -> $smoke"
-        } else {
-            Write-Warn 'get_frontmost_app smoke test failed; check PowerShell permissions'
-        }
+        Write-Warn 'winocr unavailable - OCR disabled (ok if monitor.ocr_enabled=false)'
     }
 
     if ($importOk) { Write-Host ''; Write-Ok 'All checks passed' } else { $script:MissingCritical = $true }
 }
 
-# ─── 9. Summary ────────────────────────────────────────────────────
+# ─── 11. Summary & auto-start ─────────────────────────────────────
 function Show-Summary {
     Write-Header 'Done!'
     Write-Host ''
-    Write-Host '  Manage via .\adl.ps1 (Windows equivalent of ./pdl):' -ForegroundColor White
+    Write-Host '  Next steps (via .\pdl):' -ForegroundColor White
     if ($script:InstallServer) {
-        Write-Host '    .\adl.ps1 server start       # start the Web UI + API'
-        Write-Host '    .\adl.ps1 server status'
-        Write-Host '    .\adl.ps1 server logs 100'
+        Write-Host '    .\pdl server start             # start the Web UI + API'
         Write-Host '    Open http://127.0.0.1:8888'
     }
     if ($script:InstallCollector) {
-        Write-Host '    .\adl.ps1 collector start    # push activity to server'
-        Write-Host '    .\adl.ps1 collector status'
+        Write-Host '    .\pdl collector start           # push activity to server'
     }
     if ($script:InstallServer -and $script:InstallCollector) {
-        Write-Host '    .\adl.ps1 start              # start both'
-        Write-Host '    .\adl.ps1 status'
+        Write-Host '    .\pdl start                     # start both'
     }
     Write-Host ''
-    Write-Host '  Rebuild after pulling code:' -ForegroundColor White
-    Write-Host '    .\adl.ps1 build --restart'
-    Write-Host ''
-    Write-Host '  Scheduled tasks (auto-start at login):' -ForegroundColor White
-    if ($script:InstallServer)    { Write-Host '    Get-ScheduledTaskInfo -TaskName AutoDailyLogServer' }
-    if ($script:InstallCollector) { Write-Host '    Get-ScheduledTaskInfo -TaskName AutoDailyLogCollector' }
-    Write-Host ''
+
+    # Offer auto-start
+    $pdlPath = Join-Path $InstallDir 'pdl'
+    if (Test-Path $pdlPath) {
+        $answer = Read-Host '  Start now? [Y/n]'
+        if (-not ($answer -match '^[nN]')) {
+            Write-Host ''
+            $startCmd = if ($script:InstallServer -and $script:InstallCollector) { 'start' }
+                        elseif ($script:InstallServer) { 'server start' }
+                        else { 'collector start' }
+            try {
+                & $pdlPath $startCmd.Split(' ')
+            } catch {
+                Write-Warn "Failed to start - check logs: .\pdl server logs"
+            }
+        }
+    }
 }
 
 # ─── Main ──────────────────────────────────────────────────────────
 function Main {
     Write-Host ''
-    Write-Host '+====================================================+' -ForegroundColor White
-    Write-Host "|  Polars Daily Log Windows Installer v$Version            |" -ForegroundColor White
-    Write-Host '+====================================================+' -ForegroundColor White
+    Write-Host "+==============================================+" -ForegroundColor White
+    Write-Host "|  Polars Daily Log Windows Installer v$Version" -ForegroundColor White
+    Write-Host "+==============================================+" -ForegroundColor White
 
     Resolve-Mode
-    Write-Info "Install mode: $($script:InstallMode)"
+    Write-Info "Install mode: $($script:InstallMode) | Platform: Windows"
     Test-Python
     Test-SystemDeps
 
     if ($script:MissingCritical) {
         Write-Host ''
-        Write-Fail 'Cannot continue — fix missing dependencies above first'
+        Write-Fail 'Cannot continue - fix missing dependencies above first'
         exit 1
     }
 
@@ -405,6 +507,7 @@ function Main {
     Install-PythonDeps
     Build-Frontend
     New-Configs
+    Install-BuiltinLLM
     Register-ScheduledTasks
     Invoke-Verify
     Show-Summary
