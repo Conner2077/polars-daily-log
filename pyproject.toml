@@ -1,6 +1,6 @@
 [project]
 name = "auto-daily-log"
-version = "0.5.0"
+version = "0.5.1"
 description = "Automated Jira worklog tool with activity monitoring and LLM summarization"
 license = "Apache-2.0"
 license-files = ["LICENSE"]

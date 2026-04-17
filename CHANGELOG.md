@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.1] — 2026-04-17
+
+Hotfix: install.sh 重写，修复 `curl | bash` 全流程。
+
+### Fixed
+- **所有 `read` 改用 `tty_read` helper**：统一走 `/dev/tty`，无 tty 时降级到默认值而不是死循环/崩溃
+- **节号重复**：builtin LLM 和 Frontend 都写"7."，现已重排 1-10
+- **VERSION 硬编码 0.1.0**：改为动态读 VERSION 文件（release）或 pyproject.toml（dev）
+- **`setup_data` 早退 bug**：role=both 且 collector.yaml 已存在时 `return` 跳过整个函数；已删除 early return
+- **collector.yaml sed 注入**：URL 含特殊字符时 sed 坏掉；改用 Python yaml.safe_load/dump，sed 仅作 fallback
+- **安装完不启动**：新增 "Start now? [Y/n]" 交互，默认 Y 自动拉起
+
+---
+
 ## [0.5.0] — 2026-04-17
 
 安装即用 + 自更新 + UI 打磨。新用户口令解密自动配 LLM、Web UI 一键升级、Jira 头像集成、响应式布局修复。

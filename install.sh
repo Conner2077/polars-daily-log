@@ -4,14 +4,26 @@ set -euo pipefail
 # ─── Polars Daily Log Installer ─────────────────────────────────────
 # Supports: macOS (Intel/Apple Silicon), Linux (Debian/Ubuntu/Fedora/Arch)
 # Usage:    bash install.sh
+#
+# This script is shipped inside the release tarball AND in the source repo.
+# All interactive reads use `< /dev/tty` so the script works when piped
+# from bootstrap.sh via `curl ... | bash` (stdin is the curl stream).
 # ─────────────────────────────────────────────────────────────────────
 
-VERSION="0.1.0"
 APP_NAME="auto-daily-log"
 DATA_DIR="$HOME/.auto_daily_log"
 INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_DIR="$INSTALL_DIR/.venv"
 MIN_PYTHON="3.9"
+
+# Dynamic version: read from VERSION file (release tarball) or pyproject.toml (dev).
+if [ -f "$INSTALL_DIR/VERSION" ]; then
+    VERSION="$(cat "$INSTALL_DIR/VERSION")"
+elif [ -f "$INSTALL_DIR/pyproject.toml" ]; then
+    VERSION="$(grep -E '^version\s*=' "$INSTALL_DIR/pyproject.toml" | head -1 | cut -d'"' -f2)"
+else
+    VERSION="unknown"
+fi
 
 # Role selection (server / collector / both / ask)
 # Override via env: PDL_ROLE=collector PDL_SERVER_URL=http://... PDL_COLLECTOR_NAME=foo bash install.sh
@@ -30,19 +42,38 @@ fail() { echo -e "  ${RED}✗${NC} $1"; }
 info() { echo -e "  ${BLUE}→${NC} $1"; }
 header() { echo -e "\n${BOLD}$1${NC}"; }
 
+# Helper: read from tty with fallback to default when no tty available.
+# Usage: tty_read "prompt" DEFAULT_VAR
+#   Sets REPLY to user input or the default.
+tty_read() {
+    local prompt="$1" default="${2:-}"
+    if [[ -r /dev/tty ]]; then
+        read -rp "$prompt" REPLY < /dev/tty || REPLY=""
+    else
+        REPLY=""
+    fi
+    [[ -z "$REPLY" ]] && REPLY="$default"
+}
+
 # ─── Resolve role (server / collector / both) ───────────────────────
 resolve_role() {
-    header "0. What are you installing?"
+    header "1. What are you installing?"
 
     case "$ROLE" in
         server|collector|both) : ;;
         ask|"")
-            echo "  1) server      — central web server + UI (usually one per team)"
-            echo "  2) collector   — activity collector (runs on each user machine)"
+            echo "  1) server      — central web server + UI"
+            echo "  2) collector   — activity collector (one per machine)"
             echo "  3) both        — server AND collector on this machine"
             local choice=""
             while [[ ! "$choice" =~ ^[123]$ ]]; do
-                read -rp "  Choose [1/2/3]: " choice < /dev/tty
+                tty_read "  Choose [1/2/3]: "
+                choice="$REPLY"
+                if [[ -z "$choice" ]]; then
+                    # No tty available — default to 'both'
+                    warn "No tty — defaulting to 'both' (server + collector)"
+                    choice="3"
+                fi
             done
             case "$choice" in
                 1) ROLE="server" ;;
@@ -102,7 +133,7 @@ detect_platform() {
 
 # ─── Check Python ────────────────────────────────────────────────────
 check_python() {
-    header "1. Python"
+    header "2. Python"
 
     PYTHON_CMD=""
     for cmd in python3 python; do
@@ -131,25 +162,21 @@ check_python() {
 
 # ─── Check System Dependencies ───────────────────────────────────────
 check_sys_deps() {
-    header "2. System Dependencies"
+    header "3. System Dependencies"
 
     MISSING_DEPS=()
     OPTIONAL_MISSING=()
 
     if [ "$PLATFORM" = "macos" ]; then
         check_dep_required "git" "git"
-        # macOS uses native APIs (AppleScript, Vision framework) - no extra deps
         ok "macOS native APIs (AppleScript, Vision OCR) — built-in"
     else
-        # Linux required
         check_dep_required "git" "git"
         check_dep_required "xdotool" "xdotool"
 
-        # Linux optional but recommended
         check_dep_optional "xprop" "x11-utils"
         check_dep_optional "xprintidle" "xprintidle"
 
-        # Screenshot: need at least one
         local has_screenshot=0
         for tool in gnome-screenshot scrot maim import; do
             if command -v "$tool" &>/dev/null; then
@@ -164,7 +191,6 @@ check_sys_deps() {
             OPTIONAL_MISSING+=("scrot")
         fi
 
-        # OCR
         check_dep_optional "tesseract" "tesseract-ocr"
     fi
 }
@@ -196,7 +222,7 @@ install_sys_deps() {
         return
     fi
 
-    header "3. Install System Dependencies"
+    header "4. Install System Dependencies"
 
     if [ -z "$PKG_INSTALL" ]; then
         warn "No package manager detected. Please install manually:"
@@ -211,10 +237,8 @@ install_sys_deps() {
 
     echo ""
     info "Will install: ${all_missing[*]}"
-    read -rp "  Proceed? [Y/n] " answer < /dev/tty
-    answer="${answer:-Y}"
-    if [[ "$answer" =~ ^[Yy] ]]; then
-        # Map package names per distro
+    tty_read "  Proceed? [Y/n] " "Y"
+    if [[ "$REPLY" =~ ^[Yy] ]]; then
         local pkgs=()
         for dep in "${all_missing[@]}"; do
             pkgs+=("$(map_pkg_name "$dep")")
@@ -264,7 +288,7 @@ map_pkg_name() {
 
 # ─── Setup Python Virtual Env ────────────────────────────────────────
 setup_venv() {
-    header "4. Python Virtual Environment"
+    header "5. Python Virtual Environment"
 
     if [ -z "$PYTHON_CMD" ]; then
         fail "Skipped — Python not available"
@@ -285,8 +309,6 @@ setup_venv() {
 
 # ─── Detect install mode (dev vs release) ───────────────────────────
 detect_install_mode() {
-    # Release tarball: ships a prebuilt wheel; no source tree for editable install.
-    # Dev checkout: has auto_daily_log/ source dir + web/frontend/src/.
     if compgen -G "$INSTALL_DIR/wheels/auto_daily_log-*.whl" > /dev/null; then
         INSTALL_MODE="release"
         WHEEL_PATH="$(ls "$INSTALL_DIR/wheels/"auto_daily_log-*.whl | head -1)"
@@ -302,26 +324,27 @@ detect_install_mode() {
 # Use Aliyun PyPI mirror by default for faster downloads in China.
 # Override via env: PDL_PIP_INDEX_URL=https://your.mirror/simple/
 PIP_MIRROR="${PDL_PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
+PIP_HOST="$(echo "$PIP_MIRROR" | sed -E 's|https?://([^/]+).*|\1|')"
 
 install_python_deps() {
-    header "5. Python Dependencies"
+    header "6. Python Dependencies"
 
     info "PyPI mirror: $PIP_MIRROR"
-    pip install --upgrade pip -q -i "$PIP_MIRROR" --trusted-host "$(echo "$PIP_MIRROR" | sed -E 's|https?://([^/]+).*|\1|')" 2>/dev/null
+    pip install --upgrade pip -q -i "$PIP_MIRROR" --trusted-host "$PIP_HOST" 2>/dev/null
     if [ "$INSTALL_MODE" = "release" ]; then
         info "Installing from bundled wheel: $(basename "$WHEEL_PATH")"
-        pip install "$WHEEL_PATH[$PLATFORM]" -q -i "$PIP_MIRROR" --trusted-host "$(echo "$PIP_MIRROR" | sed -E 's|https?://([^/]+).*|\1|')" 2>&1 | tail -3
+        pip install "$WHEEL_PATH[$PLATFORM]" -q -i "$PIP_MIRROR" --trusted-host "$PIP_HOST" 2>&1 | tail -3
         ok "Installed auto-daily-log[$PLATFORM] (release mode)"
     else
         info "Installing editable source + $PLATFORM dependencies..."
-        pip install -e ".[$PLATFORM]" -q -i "$PIP_MIRROR" --trusted-host "$(echo "$PIP_MIRROR" | sed -E 's|https?://([^/]+).*|\1|')" 2>&1 | tail -3
+        pip install -e ".[$PLATFORM]" -q -i "$PIP_MIRROR" --trusted-host "$PIP_HOST" 2>&1 | tail -3
         ok "Installed auto-daily-log[$PLATFORM] (dev mode)"
     fi
 }
 
 # ─── Setup Data Directory & Config ────────────────────────────────────
 setup_data() {
-    header "6. Data & Config"
+    header "7. Data & Config"
 
     if [ ! -d "$DATA_DIR" ]; then
         mkdir -p "$DATA_DIR"
@@ -330,6 +353,7 @@ setup_data() {
         ok "Data directory exists: $DATA_DIR"
     fi
 
+    # --- Server config ---
     if (( INSTALL_SERVER )); then
         local config_dest="$INSTALL_DIR/config.yaml"
         if [ -f "$config_dest" ]; then
@@ -337,102 +361,107 @@ setup_data() {
         elif [ -f "$INSTALL_DIR/config.yaml.example" ]; then
             cp "$INSTALL_DIR/config.yaml.example" "$config_dest"
             ok "Created $config_dest from template"
-            info "Edit to customize Jira URL / LLM, or do it later via Web UI Settings"
+            info "Edit to customize, or do it later via Web UI Settings"
         else
             warn "config.yaml.example not found — server may not start without config.yaml"
         fi
     fi
 
+    # --- Collector config (separate block, no early-return that could skip server) ---
     if (( INSTALL_COLLECTOR )); then
         local coll_dest="$INSTALL_DIR/collector.yaml"
         if [ -f "$coll_dest" ]; then
             ok "Collector config exists: $coll_dest"
-            return
-        fi
-        [[ -f "$INSTALL_DIR/collector.yaml.example" ]] || {
+        elif [[ -f "$INSTALL_DIR/collector.yaml.example" ]]; then
+            local default_url="http://127.0.0.1:8888"
+            local default_name
+            default_name="$(hostname -s 2>/dev/null || hostname)"
+
+            local server_url="$SERVER_URL_INPUT"
+            local name="$COLLECTOR_NAME_INPUT"
+            if [[ -z "$server_url" ]]; then
+                tty_read "  Server URL [$default_url]: " "$default_url"
+                server_url="$REPLY"
+            else
+                info "Server URL: $server_url (from PDL_SERVER_URL)"
+            fi
+            if [[ -z "$name" ]]; then
+                tty_read "  Collector display name [$default_name]: " "$default_name"
+                name="$REPLY"
+            else
+                info "Collector name: $name (from PDL_COLLECTOR_NAME)"
+            fi
+
+            # Write collector.yaml via Python to avoid sed escaping pitfalls.
+            python3 -c "
+import sys, yaml
+with open('$INSTALL_DIR/collector.yaml.example') as f:
+    cfg = yaml.safe_load(f)
+cfg['server_url'] = sys.argv[1]
+cfg['name'] = sys.argv[2]
+with open('$coll_dest', 'w') as f:
+    yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+" "$server_url" "$name" 2>/dev/null || {
+                # Fallback: sed if pyyaml not available yet (rare — pip step ran first)
+                sed -e "s|^server_url:.*|server_url: \"$server_url\"|" \
+                    -e "s|^name:.*|name: \"$name\"|" \
+                    "$INSTALL_DIR/collector.yaml.example" > "$coll_dest"
+            }
+            ok "Created collector.yaml (server=$server_url, name=$name)"
+        else
             warn "collector.yaml.example not found — cannot auto-generate collector.yaml"
-            return
-        }
-
-        local default_url="http://127.0.0.1:8888"
-        (( INSTALL_SERVER )) && default_url="http://127.0.0.1:8888"
-        local default_name
-        default_name="$(hostname -s 2>/dev/null || hostname)"
-
-        local server_url="$SERVER_URL_INPUT"
-        local name="$COLLECTOR_NAME_INPUT"
-        if [[ -z "$server_url" ]]; then
-            read -rp "  Server URL [$default_url]: " server_url < /dev/tty
-            server_url="${server_url:-$default_url}"
-        else
-            info "Server URL: $server_url (from PDL_SERVER_URL)"
         fi
-        if [[ -z "$name" ]]; then
-            read -rp "  Collector display name [$default_name]: " name < /dev/tty
-            name="${name:-$default_name}"
-        else
-            info "Collector name: $name (from PDL_COLLECTOR_NAME)"
-        fi
-
-        # Inject into template (first-match sed replacement on the canonical keys)
-        sed -e "s|^server_url:.*|server_url: \"$server_url\"|" \
-            -e "s|^name:.*|name: \"$name\"|" \
-            "$INSTALL_DIR/collector.yaml.example" > "$coll_dest"
-        ok "Created collector.yaml (server=$server_url, name=$name)"
     fi
 }
 
 # ─── Built-in LLM (optional, passphrase-protected) ───────────────────
-# Decrypts bundled builtin_llm.enc if the user supplies the author's shared
-# passphrase. Empty input = skip (user configures LLM manually in Settings).
-#
-# This is anti-scanner obfuscation, not real security. Anyone who reads this
-# script can trivially decrypt — see AGENTS.md for the threat model.
 setup_builtin_llm() {
     local enc_file="$INSTALL_DIR/builtin_llm.enc"
     (( INSTALL_SERVER )) || return 0
     [[ -f "$enc_file" ]] || return 0
 
-    header "7. Built-in LLM (optional)"
+    header "8. Built-in LLM (optional)"
 
     if ! command -v openssl &>/dev/null; then
-        warn "openssl 不可用 — 跳过内置 LLM"
+        warn "openssl not available — skipping built-in LLM"
         return 0
     fi
 
     local passphrase="${PDL_BUILTIN_PASSPHRASE:-}"
     if [[ -z "$passphrase" ]]; then
         if [[ -r /dev/tty ]]; then
-            echo "  如果作者告诉你口令，输入可自动配置 LLM；直接回车跳过。"
-            read -rp "  口令: " passphrase < /dev/tty || passphrase=""
+            echo "  If the author gave you a passphrase, enter it to auto-configure LLM."
+            echo "  Press Enter to skip."
+            tty_read "  Passphrase: "
+            passphrase="$REPLY"
         else
-            info "无 tty — 跳过内置 LLM（可设 PDL_BUILTIN_PASSPHRASE 走非交互）"
+            info "No tty — skipping (set PDL_BUILTIN_PASSPHRASE for non-interactive)"
             return 0
         fi
     else
-        info "使用 PDL_BUILTIN_PASSPHRASE 环境变量"
+        info "Using PDL_BUILTIN_PASSPHRASE env var"
     fi
 
     if [[ -z "$passphrase" ]]; then
-        info "跳过内置 LLM（用户可在 Settings 页自配）"
+        info "Skipped — configure LLM later in Settings page"
         return 0
     fi
 
     local target="$DATA_DIR/builtin.key"
     if openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -base64 \
         -in "$enc_file" -out "$target" -pass pass:"$passphrase" 2>/dev/null \
-        && python3 -c "import json,sys; json.load(open('$target'))" 2>/dev/null; then
+        && python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$target" 2>/dev/null; then
         chmod 600 "$target"
-        ok "内置 LLM 已配置 → $target"
+        ok "Built-in LLM configured → $target"
     else
         rm -f "$target"
-        warn "口令错误 — 跳过内置 LLM（可后续手动跑 install.sh 重试）"
+        warn "Wrong passphrase — skipped (re-run install.sh to retry)"
     fi
 }
 
 # ─── Build Frontend ──────────────────────────────────────────────────
 build_frontend() {
-    header "7. Frontend"
+    header "9. Frontend"
 
     if (( ! INSTALL_SERVER )); then
         ok "Collector-only install — no frontend needed"
@@ -452,9 +481,8 @@ build_frontend() {
 
     if [ -d "$frontend_dir/dist" ]; then
         ok "Frontend already built (dist/ exists)"
-        read -rp "  Rebuild? [y/N] " answer < /dev/tty
-        answer="${answer:-N}"
-        if [[ ! "$answer" =~ ^[Yy] ]]; then
+        tty_read "  Rebuild? [y/N] " "N"
+        if [[ ! "$REPLY" =~ ^[Yy] ]]; then
             return
         fi
     fi
@@ -474,12 +502,10 @@ build_frontend() {
 
 # ─── Verification ────────────────────────────────────────────────────
 verify() {
-    header "8. Verification"
+    header "10. Verification"
 
     source "$VENV_DIR/bin/activate" 2>/dev/null || true
 
-    # Test Python imports — these must all pass, or the server won't start.
-    # Checking core runtime deps individually so a missing one is obvious.
     local import_ok=1
     python3 -c "import aiosqlite" 2>/dev/null && ok "aiosqlite (async DB driver)" || { fail "aiosqlite — run: pip install -e ."; import_ok=0; }
     python3 -c "import sqlite_vec" 2>/dev/null && ok "sqlite_vec (vector index)" || { fail "sqlite_vec — run: pip install -e ."; import_ok=0; }
@@ -488,7 +514,6 @@ verify() {
     python3 -c "from auto_daily_log_collector.monitor_internals.platforms.detect import get_platform_module; m = get_platform_module(); print(type(m).__name__)" 2>/dev/null && ok "Platform detection" || { fail "Platform detection"; import_ok=0; }
     python3 -c "from auto_daily_log.web.app import create_app" 2>/dev/null && ok "Web app import" || { fail "Web app import"; import_ok=0; }
 
-    # Platform-specific checks
     if [ "$PLATFORM" = "macos" ]; then
         python3 -c "
 import subprocess
@@ -503,7 +528,6 @@ assert r.returncode == 0, r.stderr
 " 2>/dev/null && ok "xdotool (window tracking)" || warn "xdotool — not available or no display"
     fi
 
-    # OCR check
     if [ "$PLATFORM" = "macos" ]; then
         python3 -c "import Vision" 2>/dev/null && ok "Vision OCR (native)" || warn "Vision OCR — install pyobjc-framework-Vision"
     else
@@ -516,20 +540,17 @@ assert r.returncode == 0, r.stderr
     fi
 }
 
-# ─── Print Summary ───────────────────────────────────────────────────
+# ─── Print Summary & Offer Auto-start ────────────────────────────────
 summary() {
     header "Done!"
     echo ""
     echo -e "  ${BOLD}Next steps${NC} (via ./pdl):"
     if (( INSTALL_SERVER )); then
         echo "    ./pdl server start             # start the Web UI + API"
-        echo "    ./pdl server status"
-        echo "    ./pdl server logs 100"
         echo "    Open http://127.0.0.1:8888 in browser"
     fi
     if (( INSTALL_COLLECTOR )); then
         echo "    ./pdl collector start          # push activity to server"
-        echo "    ./pdl collector status"
     fi
     if (( INSTALL_SERVER && INSTALL_COLLECTOR )); then
         echo "    ./pdl start                    # start both"
@@ -540,14 +561,32 @@ summary() {
         echo -e "  in System Settings → Privacy & Security → Accessibility"
         echo ""
     fi
+
+    # Offer auto-start
+    local start_cmd=""
+    if (( INSTALL_SERVER && INSTALL_COLLECTOR )); then
+        start_cmd="start"
+    elif (( INSTALL_SERVER )); then
+        start_cmd="server start"
+    elif (( INSTALL_COLLECTOR )); then
+        start_cmd="collector start"
+    fi
+
+    if [[ -n "$start_cmd" && -x "$INSTALL_DIR/pdl" ]]; then
+        tty_read "  Start now? [Y/n] " "Y"
+        if [[ "$REPLY" =~ ^[Yy] ]]; then
+            echo ""
+            "$INSTALL_DIR/pdl" $start_cmd || warn "Failed to start — check logs with: ./pdl server logs"
+        fi
+    fi
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────
 main() {
     echo ""
-    echo -e "${BOLD}╔════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}║   Polars Daily Log Installer v$VERSION    ║${NC}"
-    echo -e "${BOLD}╚════════════════════════════════════════╝${NC}"
+    echo -e "${BOLD}╔══════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}║   Polars Daily Log Installer v$VERSION${NC}"
+    echo -e "${BOLD}╚══════════════════════════════════════════╝${NC}"
 
     MISSING_CRITICAL=0
 
