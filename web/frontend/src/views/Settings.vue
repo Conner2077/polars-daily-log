@@ -7,7 +7,7 @@
         <div class="page-subtitle">配置采集、LLM、Jira 等运行参数</div>
       </div>
       <div class="page-header-right">
-        <el-button type="primary" round @click="saveAll">保存所有</el-button>
+        <el-button type="primary" round :disabled="!isDirty" @click="saveAll">保存所有</el-button>
       </div>
     </div>
 
@@ -165,7 +165,7 @@
     <div v-show="activeTab === 'llm'" class="tab-content">
       <div class="settings-card">
         <h3 class="card-title">LLM 引擎</h3>
-        <p class="card-description">用于每日总结、自动审批与活动摘要的模型。</p>
+        <p class="card-description">用于每日总结、工时提炼与活动摘要的模型。</p>
 
         <!-- Quick fill buttons -->
         <div class="quick-fill-row">
@@ -221,13 +221,13 @@
         <div class="prompt-section">
           <div class="prompt-header">
             <div>
-              <h4 class="prompt-title">每日日志生成 Prompt</h4>
-              <p class="prompt-desc">每天定时触发时，为每个相关 Jira 任务生成一条工作日志草稿。</p>
+              <h4 class="prompt-title">原汁原味日志 Prompt</h4>
+              <p class="prompt-desc">每天触发时，将所有活动和 Git 提交如实整理成一份完整日志。对应输出模式「单份」。</p>
             </div>
             <el-button size="small" link class="reset-btn" @click="resetPrompt('summarize_prompt')">恢复默认</el-button>
           </div>
           <p class="prompt-vars">
-            可用变量：<code>{date}</code> <code>{jira_issues}</code> <code>{git_commits}</code> <code>{activities}</code>
+            可用变量：<code>{date}</code> 当天日期 · <code>{activities}</code> 活动记录 · <code>{git_commits}</code> Git 提交
           </p>
           <el-input
             v-model="settings.summarize_prompt"
@@ -241,13 +241,13 @@
         <div class="prompt-section">
           <div class="prompt-header">
             <div>
-              <h4 class="prompt-title">自动审批 Prompt</h4>
-              <p class="prompt-desc">在自动审批时间评估未审批的草稿，合格则自动提交到 Jira。</p>
+              <h4 class="prompt-title">Jira 工时提炼 Prompt</h4>
+              <p class="prompt-desc">从完整日志中筛选工作内容，按 Jira 任务归类并分配工时。对应输出模式「按 Issue」。</p>
             </div>
             <el-button size="small" link class="reset-btn" @click="resetPrompt('auto_approve_prompt')">恢复默认</el-button>
           </div>
           <p class="prompt-vars">
-            可用变量：<code>{date}</code> <code>{issue_key}</code> <code>{issue_summary}</code> <code>{time_spent_hours}</code> <code>{summary}</code> <code>{git_commits}</code>
+            可用变量：<code>{date}</code> 日期 · <code>{jira_issues}</code> 活跃 Jira 任务列表 · <code>{full_summary}</code> 当天完整日志 · <code>{git_commits}</code> Git 提交
           </p>
           <el-input
             v-model="settings.auto_approve_prompt"
@@ -262,12 +262,12 @@
           <div class="prompt-header">
             <div>
               <h4 class="prompt-title">周报 / 月报生成 Prompt</h4>
-              <p class="prompt-desc">手动触发时，聚合该周期内所有每日日志生成总结。</p>
+              <p class="prompt-desc">聚合指定时间范围内的每日日志，生成周期性总结。</p>
             </div>
             <el-button size="small" link class="reset-btn" @click="resetPrompt('period_summary_prompt')">恢复默认</el-button>
           </div>
           <p class="prompt-vars">
-            可用变量：<code>{period_start}</code> <code>{period_end}</code> <code>{period_type}</code> <code>{daily_logs}</code>
+            可用变量：<code>{period_start}</code> 开始日期 · <code>{period_end}</code> 结束日期 · <code>{period_type}</code> 周报/月报 · <code>{daily_logs}</code> 每日日志内容
           </p>
           <el-input
             v-model="settings.period_summary_prompt"
@@ -287,7 +287,7 @@
             <el-button size="small" link class="reset-btn" @click="resetPrompt('activity_summary_prompt')">恢复默认</el-button>
           </div>
           <p class="prompt-vars">
-            可用变量：<code>{prev_summaries}</code> <code>{timestamp}</code> <code>{app_name}</code> <code>{window_title}</code> <code>{url}</code> <code>{tab_title}</code> <code>{ocr_text}</code> <code>{wecom_group}</code>
+            可用变量：<code>{prev_summaries}</code> 最近活动 · <code>{timestamp}</code> 时间 · <code>{app_name}</code> 应用名 · <code>{window_title}</code> 窗口标题 · <code>{url}</code> URL · <code>{tab_title}</code> 标签页 · <code>{ocr_text}</code> OCR 文字 · <code>{wecom_group}</code> 群名
           </p>
           <el-input
             v-model="settings.activity_summary_prompt"
@@ -297,40 +297,6 @@
             class="prompt-textarea"
           />
         </div>
-      </div>
-    </div>
-
-    <!-- Scheduler Tab -->
-    <div v-show="activeTab === 'scheduler'" class="tab-content">
-      <div class="settings-card">
-        <h3 class="card-title">定时任务</h3>
-        <p class="card-description">控制每日生成与自动审批的触发时间。</p>
-
-        <div class="switch-group">
-          <div class="switch-row">
-            <el-switch v-model="settings.scheduler_enabled" />
-            <div class="switch-meta">
-              <div class="switch-label">启用每日自动生成</div>
-              <div class="switch-hint">到点后自动汇总活动与 Git 记录生成日志草稿</div>
-            </div>
-          </div>
-          <div class="switch-row">
-            <el-switch v-model="settings.auto_approve_enabled" />
-            <div class="switch-meta">
-              <div class="switch-label">启用自动审批</div>
-              <div class="switch-hint">到点后评估未审批草稿，合格则自动提交到 Jira</div>
-            </div>
-          </div>
-        </div>
-
-        <el-form label-position="top" class="settings-form two-col" style="margin-top: 24px">
-          <el-form-item label="每日日志生成时间">
-            <el-time-picker v-model="settings.scheduler_trigger_time" format="HH:mm" value-format="HH:mm" />
-          </el-form-item>
-          <el-form-item label="自动审批并提交时间">
-            <el-time-picker v-model="settings.auto_approve_trigger_time" format="HH:mm" value-format="HH:mm" />
-          </el-form-item>
-        </el-form>
       </div>
     </div>
 
@@ -487,116 +453,195 @@
       </div>
     </div>
 
-    <!-- Summary Types Tab -->
-    <div v-show="activeTab === 'summary-types'" class="tab-content">
+    <!-- Scopes & Outputs Tab -->
+    <div v-show="activeTab === 'scopes'" class="tab-content">
       <div class="settings-card">
         <h3 class="card-title">总结类型管理</h3>
         <p class="card-description">
-          每种总结类型决定了数据范围、审批方式、推送平台和 Prompt 模板。内置类型可修改配置但不能删除。
+          每个触发范围（日/周/月）下可挂载多个输出。每个输出有独立的生成方式、推送平台和 Prompt 模板。内置类型可修改配置但不能删除。
         </p>
 
-        <el-table :data="stTypes" style="width: 100%">
-          <el-table-column prop="display_name" label="类型" width="140">
-            <template #default="{ row }">
-              {{ row.display_name }}
-              <el-tag v-if="row.is_builtin" size="small" type="info" style="margin-left: 4px">内置</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="范围" width="100">
-            <template #default="{ row }">{{ scopeLabel(row.scope_rule) }}</template>
-          </el-table-column>
-          <el-table-column label="审批" width="80">
-            <template #default="{ row }">{{ row.review_mode === 'auto' ? '自动' : '手动' }}</template>
-          </el-table-column>
-          <el-table-column label="推送" width="120">
-            <template #default="{ row }">
-              <span v-if="row.publisher_name" class="cell-mono">{{ row.publisher_name }}</span>
-              <span v-else style="color:#999">无</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="Prompt" min-width="120">
-            <template #default="{ row }">
-              <span v-if="row.prompt_template" style="color:#52c41a">自定义</span>
-              <span v-else style="color:#999">全局默认</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="180">
-            <template #default="{ row }">
-              <el-button size="small" round @click="editSummaryType(row)">编辑</el-button>
+        <div v-for="scope in scopesList" :key="scope.name" class="scope-block">
+          <!-- Scope header -->
+          <div class="scope-header">
+            <div class="scope-header-left">
+              <strong>{{ scope.display_name }}</strong>
+              <el-tag v-if="scope.is_builtin" size="small" type="info">内置</el-tag>
+              <el-tag size="small">{{ scopeTypeLabel(scope.scope_type) }}</el-tag>
+              <span v-if="scope.schedule_rule" class="scope-schedule">
+                定时 {{ formatScheduleRule(scope.schedule_rule) }}
+              </span>
+            </div>
+            <div class="scope-header-right">
+              <el-button size="small" round @click="editScope(scope)">编辑范围</el-button>
+              <el-button size="small" round @click="openAddOutput(scope.name)">+ 输出</el-button>
               <el-popconfirm
-                v-if="!row.is_builtin"
-                :title="`删除「${row.display_name}」？已有的日志记录不受影响。`"
-                confirm-button-text="删除"
-                cancel-button-text="取消"
-                :width="280"
-                @confirm="deleteSummaryType(row.name)"
+                v-if="!scope.is_builtin"
+                :title="`删除「${scope.display_name}」及其所有输出？`"
+                confirm-button-text="删除" cancel-button-text="取消" :width="280"
+                @confirm="deleteScope(scope.name)"
               >
                 <template #reference>
                   <el-button size="small" round class="danger-btn">删除</el-button>
                 </template>
               </el-popconfirm>
-            </template>
-          </el-table-column>
-        </el-table>
+            </div>
+          </div>
+
+          <!-- Outputs table -->
+          <el-table :data="scope.outputs || []" style="width: 100%" size="small">
+            <el-table-column prop="display_name" label="输出名称" width="160">
+              <template #default="{ row }">
+                {{ row.display_name }}
+                <el-tag v-if="isBuiltinOutput(row)" size="small" type="info" style="margin-left: 4px">内置</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="模式" width="100">
+              <template #default="{ row }">{{ row.output_mode === 'per_issue' ? '按 Issue' : '单份' }}</template>
+            </el-table-column>
+            <el-table-column label="生成" width="80">
+              <template #default>
+                <span v-if="scope.schedule_rule" style="color:#52c41a">自动</span>
+                <span v-else style="color:#999">手动</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="推送" width="120">
+              <template #default="{ row }">
+                <template v-if="row.publisher_name">
+                  <span class="cell-mono">{{ publisherDisplayName(row.publisher_name) }}</span>
+                  <span v-if="row.auto_publish" style="color:#52c41a; margin-left: 4px">·自动</span>
+                  <span v-else style="color:#999; margin-left: 4px">·手动</span>
+                </template>
+                <span v-else style="color:#999">仅存档</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="Prompt" min-width="80">
+              <template #default="{ row }">
+                <span v-if="row.prompt_template" style="color:#52c41a">自定义</span>
+                <span v-else style="color:#999">默认</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="140">
+              <template #default="{ row }">
+                <el-button size="small" round @click="editOutput(row, scope)">编辑</el-button>
+                <el-popconfirm
+                  :title="`删除输出「${row.display_name}」？`"
+                  confirm-button-text="删除" cancel-button-text="取消"
+                  @confirm="deleteScopeOutput(row.id)"
+                >
+                  <template #reference>
+                    <el-button size="small" round class="danger-btn">删除</el-button>
+                  </template>
+                </el-popconfirm>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
 
         <div style="margin-top: 16px">
-          <el-button round @click="showAddTypeDialog = true">+ 新增总结类型</el-button>
+          <el-button round @click="openAddScope">+ 新增触发范围</el-button>
         </div>
       </div>
 
-      <!-- Add / Edit dialog -->
-      <el-dialog
-        v-model="stDialogVisible"
-        :title="stEditMode ? '编辑总结类型' : '新增总结类型'"
-        width="560px"
-        :close-on-click-modal="false"
-      >
+      <!-- Scope edit dialog -->
+      <el-dialog v-model="scopeDialogVisible" :title="scopeEditMode ? '编辑触发范围' : '新增触发范围'" width="480px" :close-on-click-modal="false">
         <el-form label-position="top" class="settings-form">
-          <el-form-item v-if="!stEditMode" label="标识名（唯一，英文）">
-            <el-input v-model="stForm.name" placeholder="e.g. sprint-review" :disabled="stEditMode" />
+          <el-form-item v-if="!scopeEditMode" label="标识名（唯一，英文）">
+            <el-input v-model="scopeForm.name" placeholder="e.g. sprint" />
           </el-form-item>
           <el-form-item label="显示名称">
-            <el-input v-model="stForm.display_name" placeholder="e.g. Sprint 回顾" />
+            <el-input v-model="scopeForm.display_name" placeholder="e.g. Sprint 报告" />
           </el-form-item>
           <el-form-item label="数据范围">
-            <el-select v-model="stForm.scope_type" style="width: 100%">
+            <el-select v-model="scopeForm.scope_type" style="width: 100%">
               <el-option label="按天" value="day" />
               <el-option label="按周" value="week" />
               <el-option label="按月" value="month" />
-              <el-option label="按 Issue" value="issue_based" />
-              <el-option label="自定义天数" value="custom_days" />
+              <el-option label="自定义" value="custom" />
             </el-select>
           </el-form-item>
-          <el-form-item label="审批方式">
-            <el-select v-model="stForm.review_mode" style="width: 100%">
-              <el-option label="自动审批" value="auto" />
-              <el-option label="手动审批" value="manual" />
+          <el-form-item label="生成方式">
+            <el-select v-model="scopeForm.auto_generate" style="width: 100%">
+              <el-option label="手动生成" :value="false" />
+              <el-option label="定时自动生成" :value="true" />
             </el-select>
           </el-form-item>
-          <el-form-item label="推送平台">
-            <el-select v-model="stForm.publisher_name" style="width: 100%" clearable placeholder="不推送">
-              <el-option label="Jira" value="jira" />
-              <el-option label="Webhook（企微/飞书/Slack/自定义）" value="webhook" />
+          <el-form-item v-if="scopeForm.auto_generate" label="定时触发时间">
+            <el-time-picker v-model="scopeForm.trigger_time" format="HH:mm" value-format="HH:mm" placeholder="18:00" style="width: 100%" />
+          </el-form-item>
+          <el-form-item v-if="scopeForm.auto_generate && scopeForm.scope_type === 'week'" label="触发星期">
+            <el-select v-model="scopeForm.trigger_day" style="width: 100%">
+              <el-option label="周一" value="monday" />
+              <el-option label="周二" value="tuesday" />
+              <el-option label="周三" value="wednesday" />
+              <el-option label="周四" value="thursday" />
+              <el-option label="周五" value="friday" />
+              <el-option label="周六" value="saturday" />
+              <el-option label="周日" value="sunday" />
             </el-select>
           </el-form-item>
-          <el-form-item v-if="stForm.publisher_name === 'webhook'" label="Webhook URL">
-            <el-input v-model="stForm.webhook_url" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." />
-          </el-form-item>
-          <el-form-item v-if="stForm.publisher_name === 'webhook'" label="消息格式">
-            <el-select v-model="stForm.webhook_format" style="width: 100%">
-              <el-option label="通用 JSON" value="generic" />
-              <el-option label="企业微信" value="wecom" />
-              <el-option label="飞书" value="feishu" />
-              <el-option label="Slack" value="slack" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="Prompt 模板（留空使用全局默认）">
-            <el-input v-model="stForm.prompt_template" type="textarea" :rows="5" placeholder="留空则使用 Settings → Prompt 模板 的全局配置" />
+          <el-form-item v-if="scopeForm.auto_generate && scopeForm.scope_type === 'month'" label="触发日期（每月几号）">
+            <el-input-number v-model="scopeForm.trigger_day_of_month" :min="1" :max="28" />
           </el-form-item>
         </el-form>
         <template #footer>
-          <el-button round @click="stDialogVisible = false">取消</el-button>
-          <el-button type="primary" round @click="saveSummaryType">{{ stEditMode ? '保存' : '创建' }}</el-button>
+          <el-button round @click="scopeDialogVisible = false">取消</el-button>
+          <el-button type="primary" round @click="saveScope">{{ scopeEditMode ? '保存' : '创建' }}</el-button>
+        </template>
+      </el-dialog>
+
+      <!-- Output edit dialog -->
+      <el-dialog v-model="outputDialogVisible" :title="outputEditMode ? '编辑输出' : '新增输出'" width="560px" :close-on-click-modal="false">
+        <el-form label-position="top" class="settings-form">
+          <el-form-item label="输出名称">
+            <el-input v-model="outputForm.display_name" placeholder="e.g. Jira 工时日志" />
+          </el-form-item>
+          <el-form-item label="输出模式">
+            <el-select v-model="outputForm.output_mode" style="width: 100%">
+              <el-option label="单份总结" value="single" />
+              <el-option label="按 Issue 逐条生成" value="per_issue" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="outputForm.output_mode === 'per_issue'" label="Issue 来源">
+            <el-select v-model="outputForm.issue_source" style="width: 100%">
+              <el-option label="Jira" value="jira" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="推送平台">
+            <el-select v-model="outputForm.publisher_name" style="width: 100%" clearable placeholder="仅存档（不推送）">
+              <el-option label="Jira" value="jira" />
+              <el-option label="Webhook（企微/飞书/Slack）" value="webhook" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="outputForm.publisher_name === 'webhook'" label="Webhook URL">
+            <el-input v-model="outputForm.webhook_url" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." />
+          </el-form-item>
+          <el-form-item v-if="outputForm.publisher_name" label="推送方式">
+            <el-select v-model="outputForm.auto_publish" style="width: 100%">
+              <el-option label="手动推送" :value="false" />
+              <el-option label="生成后自动推送" :value="true" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="Prompt 模板">
+            <el-select v-model="outputForm.prompt_source" style="width: 100%" @change="onPromptSourceChange">
+              <el-option label="原汁原味日志（全局默认）" value="summarize" />
+              <el-option label="Jira 工时提炼（全局默认）" value="auto_approve" />
+              <el-option label="周报/月报（全局默认）" value="period_summary" />
+              <el-option label="自定义 Prompt" value="custom" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="outputForm.prompt_source === 'custom'" label="自定义 Prompt 内容">
+            <el-input v-model="outputForm.prompt_template" type="textarea" :rows="8" placeholder="输入自定义 Prompt 模板" />
+            <p class="prompt-vars" style="margin-top: 8px">
+              单份模式可用：<code>{date}</code> 日期 · <code>{activities}</code> 活动 · <code>{git_commits}</code> Git 提交<br>
+              按 Issue 模式可用：<code>{date}</code> 日期 · <code>{jira_issues}</code> 任务列表 · <code>{full_summary}</code> 完整日志 · <code>{git_commits}</code> Git 提交<br>
+              周/月模式可用：<code>{period_start}</code> · <code>{period_end}</code> · <code>{period_type}</code> · <code>{daily_logs}</code>
+            </p>
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button round @click="outputDialogVisible = false">取消</el-button>
+          <el-button type="primary" round @click="saveOutput">{{ outputEditMode ? '保存' : '创建' }}</el-button>
         </template>
       </el-dialog>
     </div>
@@ -733,7 +778,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, Delete } from '@element-plus/icons-vue'
 import api from '../api'
@@ -748,10 +794,9 @@ const tabs = [
   { name: 'jira', label: 'Jira 连接' },
   { name: 'llm', label: 'LLM 引擎' },
   { name: 'prompts', label: 'Prompt 模板' },
-  { name: 'scheduler', label: '定时任务' },
   { name: 'collectors', label: '数据采集节点' },
   { name: 'recycle', label: '回收站' },
-  { name: 'summary-types', label: '总结类型' },
+  { name: 'scopes', label: '总结类型' },
   { name: 'updates', label: '自动更新' },
 ]
 
@@ -772,113 +817,233 @@ const settings = ref({
   llm_engine: 'openai_compat', llm_api_key: '', llm_model: '', llm_base_url: '',
   summarize_prompt: '', auto_approve_prompt: '', period_summary_prompt: '', activity_summary_prompt: '',
   scheduler_enabled: true, scheduler_trigger_time: '18:00',
-  auto_approve_enabled: true, auto_approve_trigger_time: '21:30',
   activity_retention_days: 7, recycle_retention_days: 30,
 })
+// Dirty tracking: snapshot after load, compare on every change.
+const savedSnapshot = ref('')
+const isDirty = computed(() => savedSnapshot.value !== '' && JSON.stringify(settings.value) !== savedSnapshot.value)
+
+function snapshotSettings() {
+  savedSnapshot.value = JSON.stringify(settings.value)
+}
+
 const recycledItems = ref([])
 const collectors = ref([])
 
-// ─── Summary Types state ──────────────────────────────────────────────
-const stTypes = ref([])
-const stDialogVisible = ref(false)
-const stEditMode = ref(false)
-const showAddTypeDialog = ref(false)
-const stForm = ref({
-  name: '', display_name: '', scope_type: 'day', review_mode: 'manual',
-  publisher_name: '', webhook_url: '', webhook_format: 'generic',
-  prompt_template: '',
+// ─── Scopes & Outputs ────────────────────────────────────────────────
+const scopesList = ref([])
+
+// Scope dialog
+const scopeDialogVisible = ref(false)
+const scopeEditMode = ref(false)
+const scopeForm = ref({
+  name: '', display_name: '', scope_type: 'day',
+  auto_generate: false, trigger_time: '18:00',
+  trigger_day: 'monday', trigger_day_of_month: 1,
 })
 
-function scopeLabel(raw) {
-  try {
-    const t = JSON.parse(raw || '{}').type
-    return { day: '按天', week: '按周', month: '按月', issue_based: '按 Issue', custom_days: '自定义' }[t] || t
-  } catch { return '—' }
+// Output dialog
+const outputDialogVisible = ref(false)
+const outputEditMode = ref(false)
+const outputEditId = ref(null)
+const outputScopeName = ref('')
+const outputForm = ref({
+  display_name: '', output_mode: 'single', issue_source: 'jira',
+  publisher_name: '', webhook_url: '', auto_publish: false,
+  prompt_source: 'summarize', prompt_template: '',
+})
+
+function scopeTypeLabel(t) {
+  return { day: '按天', week: '按周', month: '按月', custom: '自定义' }[t] || t
 }
 
-async function loadSummaryTypes() {
-  try {
-    const r = await api.getSummaryTypes()
-    stTypes.value = r.data
-  } catch { stTypes.value = [] }
+function publisherDisplayName(name) {
+  return { jira: 'Jira', webhook: 'Webhook' }[name] || name
 }
 
-function editSummaryType(row) {
-  stEditMode.value = true
+function formatScheduleRule(raw) {
+  try {
+    const r = JSON.parse(raw)
+    let s = r.time || ''
+    if (r.day) {
+      const dayMap = { monday: '周一', tuesday: '周二', wednesday: '周三', thursday: '周四', friday: '周五', saturday: '周六', sunday: '周日' }
+      s = (dayMap[r.day] || r.day) + ' ' + s
+    }
+    if (r.day_of_month) s = `每月${r.day_of_month}号 ` + s
+    return s
+  } catch { return raw }
+}
+
+function isBuiltinOutput(row) {
+  // Built-in outputs: the seeded ones (原汁原味日志, Jira 工时日志, 周报, 月报)
+  return ['原汁原味日志', 'Jira 工时日志', '周报', '月报'].includes(row.display_name)
+}
+
+async function loadScopes() {
+  try {
+    const r = await api.getScopes()
+    scopesList.value = r.data
+  } catch { scopesList.value = [] }
+}
+
+function openAddScope() {
+  scopeEditMode.value = false
+  scopeForm.value = {
+    name: '', display_name: '', scope_type: 'day',
+    auto_generate: false, trigger_time: '18:00',
+    trigger_day: 'monday', trigger_day_of_month: 1,
+  }
+  scopeDialogVisible.value = true
+}
+
+function editScope(scope) {
+  scopeEditMode.value = true
+  let autoGen = false, time = '18:00', day = 'monday', dayOfMonth = 1
+  if (scope.schedule_rule) {
+    try {
+      const r = JSON.parse(scope.schedule_rule)
+      autoGen = true
+      time = r.time || '18:00'
+      day = r.day || 'monday'
+      dayOfMonth = r.day_of_month || 1
+    } catch { /* use defaults */ }
+  }
+  scopeForm.value = {
+    name: scope.name, display_name: scope.display_name, scope_type: scope.scope_type,
+    auto_generate: autoGen, trigger_time: time,
+    trigger_day: day, trigger_day_of_month: dayOfMonth,
+  }
+  scopeDialogVisible.value = true
+}
+
+async function saveScope() {
+  const f = scopeForm.value
+  let scheduleRule = null
+  if (f.auto_generate) {
+    const rule = { time: f.trigger_time || '18:00' }
+    if (f.scope_type === 'week') rule.day = f.trigger_day
+    if (f.scope_type === 'month') rule.day_of_month = f.trigger_day_of_month
+    scheduleRule = JSON.stringify(rule)
+  }
+  try {
+    if (scopeEditMode.value) {
+      await api.updateScope(f.name, {
+        display_name: f.display_name,
+        scope_type: f.scope_type,
+        schedule_rule: scheduleRule || '',
+      })
+      ElMessage.success(`已更新「${f.display_name}」`)
+    } else {
+      if (!f.name || !f.display_name) { ElMessage.warning('请填写标识名和显示名称'); return }
+      await api.createScope({
+        name: f.name, display_name: f.display_name,
+        scope_type: f.scope_type, schedule_rule: scheduleRule,
+      })
+      ElMessage.success(`已创建「${f.display_name}」`)
+    }
+    scopeDialogVisible.value = false
+    await loadScopes()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '操作失败')
+  }
+}
+
+async function deleteScope(name) {
+  try {
+    await api.deleteScope(name)
+    ElMessage.success('已删除')
+    await loadScopes()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '删除失败')
+  }
+}
+
+function openAddOutput(scopeName) {
+  outputEditMode.value = false
+  outputScopeName.value = scopeName
+  outputForm.value = {
+    display_name: '', output_mode: 'single', issue_source: 'jira',
+    publisher_name: '', webhook_url: '', auto_publish: false,
+    prompt_source: 'summarize', prompt_template: '',
+  }
+  outputDialogVisible.value = true
+}
+
+function onPromptSourceChange(val) {
+  if (val !== 'custom') {
+    outputForm.value.prompt_template = ''
+  }
+}
+
+function editOutput(row, scope) {
+  outputEditMode.value = true
+  outputEditId.value = row.id
+  outputScopeName.value = scope.name
   const pubCfg = (() => { try { return JSON.parse(row.publisher_config || '{}') } catch { return {} } })()
-  stForm.value = {
-    name: row.name,
+  // Detect prompt_source: if has custom prompt_template → 'custom', else infer from output_mode
+  let promptSource = 'summarize'
+  if (row.prompt_template) {
+    promptSource = 'custom'
+  } else if (row.output_mode === 'per_issue') {
+    promptSource = 'auto_approve'
+  } else if (scope.scope_type === 'week' || scope.scope_type === 'month') {
+    promptSource = 'period_summary'
+  }
+  outputForm.value = {
     display_name: row.display_name,
-    scope_type: (() => { try { return JSON.parse(row.scope_rule || '{}').type || 'day' } catch { return 'day' } })(),
-    review_mode: row.review_mode || 'manual',
+    output_mode: row.output_mode || 'single',
+    issue_source: row.issue_source || 'jira',
     publisher_name: row.publisher_name || '',
     webhook_url: pubCfg.url || '',
-    webhook_format: pubCfg.format || 'generic',
+    auto_publish: !!row.auto_publish,
+    prompt_source: promptSource,
     prompt_template: row.prompt_template || '',
   }
-  stDialogVisible.value = true
+  outputDialogVisible.value = true
 }
 
-// Watch showAddTypeDialog to open the dialog in create mode
-import { watch } from 'vue'
-watch(showAddTypeDialog, (v) => {
-  if (v) {
-    stEditMode.value = false
-    stForm.value = {
-      name: '', display_name: '', scope_type: 'day', review_mode: 'manual',
-      publisher_name: '', webhook_url: '', webhook_format: 'generic',
-      prompt_template: '',
-    }
-    stDialogVisible.value = true
-    showAddTypeDialog.value = false
-  }
-})
-
-async function saveSummaryType() {
-  const f = stForm.value
-  const scopeRule = JSON.stringify({ type: f.scope_type })
+async function saveOutput() {
+  const f = outputForm.value
   const publisherConfig = f.publisher_name === 'webhook'
-    ? JSON.stringify({ url: f.webhook_url, format: f.webhook_format })
+    ? JSON.stringify({ url: f.webhook_url })
     : '{}'
   try {
-    if (stEditMode.value) {
-      await api.updateSummaryType(f.name, {
+    if (outputEditMode.value) {
+      await api.updateScopeOutput(outputEditId.value, {
         display_name: f.display_name,
-        scope_rule: scopeRule,
-        review_mode: f.review_mode,
+        output_mode: f.output_mode,
+        issue_source: f.output_mode === 'per_issue' ? f.issue_source : null,
         publisher_name: f.publisher_name || null,
         publisher_config: publisherConfig,
+        auto_publish: f.auto_publish,
         prompt_template: f.prompt_template || '',
       })
       ElMessage.success(`已更新「${f.display_name}」`)
     } else {
-      if (!f.name || !f.display_name) {
-        ElMessage.warning('请填写标识名和显示名称')
-        return
-      }
-      await api.createSummaryType({
-        name: f.name,
+      if (!f.display_name) { ElMessage.warning('请填写输出名称'); return }
+      await api.createScopeOutput(outputScopeName.value, {
         display_name: f.display_name,
-        scope_rule: scopeRule,
-        review_mode: f.review_mode,
+        output_mode: f.output_mode,
+        issue_source: f.output_mode === 'per_issue' ? f.issue_source : null,
         publisher_name: f.publisher_name || null,
         publisher_config: publisherConfig,
+        auto_publish: f.auto_publish,
         prompt_template: f.prompt_template || null,
       })
       ElMessage.success(`已创建「${f.display_name}」`)
     }
-    stDialogVisible.value = false
-    await loadSummaryTypes()
+    outputDialogVisible.value = false
+    await loadScopes()
   } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || '操作失败')
+    ElMessage.error(e?.response?.data?.detail || '操作失败')
   }
 }
 
-async function deleteSummaryType(name) {
+async function deleteScopeOutput(outputId) {
   try {
-    await api.deleteSummaryType(name)
+    await api.deleteScopeOutput(outputId)
     ElMessage.success('已删除')
-    await loadSummaryTypes()
+    await loadScopes()
   } catch (e) {
     ElMessage.error(e?.response?.data?.detail || '删除失败')
   }
@@ -1075,6 +1240,9 @@ async function loadSettings() {
       else settings.value[item.key] = val
     }
   }
+  // Snapshot must happen AFTER defaults are prefilled (onMounted calls
+  // loadDefaultPrompts right after this). We defer via nextTick-like
+  // approach: the caller (onMounted) snapshots after all loads finish.
 }
 
 async function loadGitRepos() {
@@ -1179,6 +1347,7 @@ async function saveAll() {
     }
     await api.putSetting(key, String(out))
   }
+  snapshotSettings()
   ElMessage.success('设置已保存')
 }
 
@@ -1208,10 +1377,11 @@ onMounted(async () => {
   // settings must load BEFORE defaults: defaults prefill only when setting is empty
   await loadSettings()
   await loadDefaultPrompts()
+  snapshotSettings()  // baseline for dirty tracking
   loadGitRepos()
   loadRecycled()
   loadCollectors()
-  loadSummaryTypes()
+  loadScopes()
   // Updates: cached check is cheap; backups list is local file scan.
   checkUpdate(false)
   loadBackups()
@@ -1225,7 +1395,28 @@ onMounted(async () => {
   })
 })
 
-onUnmounted(() => stopPollingStatus())
+onUnmounted(() => {
+  stopPollingStatus()
+  window.removeEventListener('beforeunload', warnUnsaved)
+})
+
+// ─── Unsaved-changes guards ──────────────────────────────────────────
+function warnUnsaved(e) {
+  if (isDirty.value) {
+    e.preventDefault()
+    e.returnValue = ''  // required by spec for the browser prompt
+  }
+}
+window.addEventListener('beforeunload', warnUnsaved)
+
+onBeforeRouteLeave((to, from, next) => {
+  if (isDirty.value) {
+    const leave = window.confirm('设置尚未保存，确定离开？')
+    next(leave)
+  } else {
+    next()
+  }
+})
 </script>
 
 <style scoped>
@@ -1736,5 +1927,40 @@ onUnmounted(() => stopPollingStatus())
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ───── Scope blocks (总结类型 tab) ───── */
+.scope-block {
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.scope-block:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+.scope-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.scope-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.scope-header-right {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.scope-schedule {
+  font-size: 12px;
+  color: #52c41a;
+  font-family: var(--font-mono);
 }
 </style>

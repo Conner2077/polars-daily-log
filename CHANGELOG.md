@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.4] — 2026-04-17
+
+安装全流程修复（server/both/collector 三角色验证通过）。
+
+### Fixed
+- **缺 packaging 依赖**：updater 模块 import packaging 但 pyproject.toml 未声明 → 新装用户 server 启动秒退
+- **tty_read stderr 噪音**：管道环境下 /dev/tty 不可用时打印 "Device not configured"，已 2>/dev/null 抑制
+- **定时任务表名错误**：scheduler 查 time_scopes 表但实际叫 summary_types → 定时任务不注册
+- **Settings UI 触发时间无效**：scheduler 不读 settings 表的 scheduler_trigger_time → 用户改时间没用；已加 settings override
+- **Settings 保存按钮**：无改动时灰化不可点；有未保存改动时浏览器/路由切换弹确认
+
+---
+
 ## [0.5.3] — 2026-04-17
 
 Hotfix: Windows 安装崩溃 + CI 修复。
