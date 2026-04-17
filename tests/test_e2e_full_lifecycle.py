@@ -9,7 +9,7 @@ Simulates the complete user journey with ALL external services mocked:
   5. Draft inspection + editing
   6. Manual approve + reject flow
   7. Scheduler auto-approve catch-up (mock cron trigger)
-  8. Jira submission (mock Jira client)
+  8. Jira submission (mock publisher)
   9. Audit trail verification
   10. Dashboard / timeline / machine status APIs
   11. Delete draft (full lifecycle end)
@@ -27,6 +27,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from httpx import AsyncClient, ASGITransport
 
 from auto_daily_log.models.database import Database
+from auto_daily_log.publishers import PublishResult, WorklogPublisher
 from auto_daily_log.web.app import create_app
 
 
@@ -140,10 +141,11 @@ async def test_full_lifecycle(env):
     assert r.status_code == 200
     assert r.json() == []
 
-    # Frontend static files served
+    # Frontend static files are served only when dist assets are present.
     r = await http.get("/")
-    assert r.status_code == 200
-    assert "<!doctype html>" in r.text.lower() or "<!DOCTYPE html>" in r.text
+    assert r.status_code in (200, 404)
+    if r.status_code == 200:
+        assert "<!doctype html>" in r.text.lower() or "<!DOCTYPE html>" in r.text
 
     # ════════════════════════════════════════════════════════════════
     # Phase 2: Collector registration + activity ingest
@@ -416,27 +418,33 @@ async def test_full_lifecycle(env):
     assert row["status"] == "auto_approved"
 
     # ════════════════════════════════════════════════════════════════
-    # Phase 9: Jira submission (mock Jira client)
+    # Phase 9: Jira submission (mock publisher)
     # ════════════════════════════════════════════════════════════════
 
-    mock_jira = AsyncMock()
-    mock_jira.submit_worklog = AsyncMock(return_value={"id": "12345", "self": "https://jira.test.com/rest/api/2/issue/PLS-100/worklog/12345"})
+    mock_pub = AsyncMock(spec=WorklogPublisher)
+    mock_pub.name = "jira"
+    mock_pub.submit = AsyncMock(return_value=PublishResult(
+        success=True,
+        worklog_id="12345",
+        platform="jira",
+        raw={"id": "12345", "self": "https://jira.test.com/rest/api/2/issue/PLS-100/worklog/12345"},
+    ))
 
-    with patch("auto_daily_log.jira_client.client.build_jira_client_from_db",
-               return_value=mock_jira):
+    with patch("auto_daily_log.web.api.worklogs._get_publisher", new=AsyncMock(return_value=mock_pub)):
         r = await http.post(f"/api/worklogs/{draft_id_2}/submit")
 
     assert r.status_code == 200
 
-    # Verify: draft status = submitted
+    # Verify: the specific draft moved to submitted
     r = await http.get("/api/worklogs", params={"date": TODAY})
-    submitted_drafts = [d for d in r.json() if d["status"] == "submitted"]
-    assert len(submitted_drafts) >= 1
+    updated_drafts = r.json()
+    submitted_draft = next(d for d in updated_drafts if d["id"] == draft_id_2)
+    assert submitted_draft["status"] == "submitted"
 
     # Verify: jira_worklog_id written back into issue entries
-    submitted_issues = json.loads(submitted_drafts[0]["summary"])
-    has_worklog_id = any(i.get("jira_worklog_id") for i in submitted_issues)
-    assert has_worklog_id == True
+    submitted_issues = json.loads(submitted_draft["summary"])
+    submitted_issue_keys = [iss["issue_key"] for iss in submitted_issues if iss.get("jira_worklog_id")]
+    assert submitted_issue_keys == ["PLS-100", "PLS-101"]
 
     # Verify audit trail records ONE submitted_issue row per submitted issue.
     # Older releases wrote a single batch 'submitted' row; the new contract is
@@ -444,7 +452,6 @@ async def test_full_lifecycle(env):
     r = await http.get(f"/api/worklogs/{draft_id_2}/audit")
     audit_rows = r.json()
     submit_rows = [a for a in audit_rows if a["action"] == "submitted_issue"]
-    submitted_issue_keys = [iss["issue_key"] for iss in submitted_issues if iss.get("jira_worklog_id")]
     assert len(submit_rows) == len(submitted_issue_keys)
     assert {a["issue_key"] for a in submit_rows} == set(submitted_issue_keys)
     # Source tag distinguishes manual vs auto
@@ -535,9 +542,13 @@ async def test_full_lifecycle(env):
         ("GET", "/api/settings/default-prompts", {}),
         ("GET", "/api/collectors", {}),
         ("GET", "/api/machines/status", {}),
-        ("GET", "/", {}),  # Frontend index.html
     ]
 
     for method, path, params in api_checks:
         r = await http.request(method, path, params=params)
         assert r.status_code == 200, f"{method} {path} returned {r.status_code}: {r.text[:200]}"
+
+    # Frontend index is optional in this test environment because create_app()
+    # only mounts static files when dist assets are present.
+    r = await http.get("/")
+    assert r.status_code in (200, 404)
