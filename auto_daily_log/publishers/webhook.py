@@ -42,10 +42,13 @@ class WebhookPublisher:
         self, *, issue_key: str, time_spent_sec: int, comment: str, started: str
     ) -> dict:
         hours = round(time_spent_sec / 3600, 1)
-        text = f"[{issue_key}] {hours}h — {comment}"
+        if issue_key:
+            text = f"[{issue_key}] {hours}h — {comment}"
+        else:
+            text = comment
 
         if self._format == "wecom":
-            return {"msgtype": "text", "text": {"content": text}}
+            return {"msgtype": "markdown", "markdown": {"content": text}}
         if self._format == "feishu":
             return {"msg_type": "text", "content": {"text": text}}
         if self._format == "slack":
@@ -86,8 +89,19 @@ class WebhookPublisher:
                         error=f"HTTP {r.status_code}: {r.text[:200]}",
                         raw={"status_code": r.status_code, "body": r.text[:500]},
                     )
-                # Webhook doesn't usually return a worklog ID — use status code
-                # as a pseudo-ID so the audit trail has something to show.
+                # WeChat Work / Feishu return HTTP 200 with errcode in body
+                try:
+                    resp = r.json()
+                    errcode = resp.get("errcode") or resp.get("code")
+                    if errcode and errcode != 0:
+                        errmsg = resp.get("errmsg") or resp.get("msg") or r.text[:200]
+                        return PublishResult(
+                            success=False, platform=self.name,
+                            error=f"errcode {errcode}: {errmsg}",
+                            raw={"status_code": r.status_code, "body": r.text[:500]},
+                        )
+                except (ValueError, AttributeError):
+                    pass  # non-JSON response, treat HTTP 2xx as success
                 return PublishResult(
                     success=True, worklog_id=f"webhook-{r.status_code}",
                     platform=self.name,

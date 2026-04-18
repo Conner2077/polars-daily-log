@@ -247,7 +247,7 @@ class Application:
 
                 from .web.api.summaries import generate_scope
                 # generate_scope handles dedup internally (deletes existing for same period)
-                created = await generate_scope(self.db, engine, scope_name, today)
+                created = await generate_scope(self.db, engine, scope_name, today, auto_publish=True)
                 duration_ms = int((_time.monotonic() - t0) * 1000)
                 print(f"[ScopeScheduler] generate completed for '{scope_name}': {len(created)} summaries in {duration_ms}ms")
 
@@ -429,7 +429,7 @@ class Application:
                 engine = await get_engine_by_name(self.db, None)  # default engine
 
                 from .web.api.summaries import generate_scope
-                created = await generate_scope(self.db, engine, scope["name"], today)
+                created = await generate_scope(self.db, engine, scope["name"], today, auto_publish=True)
                 duration_ms = int((_time.monotonic() - t0) * 1000)
                 print(f"[ScopeScheduler:Catchup] '{scope['name']}' catch-up completed: {len(created)} summaries in {duration_ms}ms")
                 await self.db.execute(

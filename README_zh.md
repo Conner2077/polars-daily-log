@@ -159,6 +159,24 @@ Get-ScheduledTaskInfo -TaskName AutoDailyLogCollector
 
 升级覆盖 tarball 时，这些 `~/` 下的**都不会动**，升级不丢数据。
 
+### 推送到群聊（Webhook）
+
+除了 Jira，还可以通过 webhook 把日志推送到企业微信、飞书、Slack 群聊或任意 HTTP 端点。
+
+1. 在群聊中**创建机器人**，复制 Webhook URL
+2. 打开 **Settings** > "触发范围 & 输出" > 添加或编辑输出
+3. 推送平台选 **Webhook**，粘贴 URL，选择**消息格式**（企业微信 / 飞书 / Slack / 通用 JSON）
+4. 推送方式选"手动推送"或"定时生成后自动推送"
+
+| 格式 | 发送的 body |
+|------|------------|
+| 企业微信 | `{"msgtype":"markdown","markdown":{"content":"..."}}` |
+| 飞书 | `{"msg_type":"text","content":{"text":"..."}}` |
+| Slack | `{"text":"..."}` |
+| 通用 JSON | `{"issue_key":"...","time_spent_sec":...,"comment":"...","started":"..."}` |
+
+> **手动 vs 自动**："定时生成后自动推送"仅在 scheduler 按 cron 定时生成日志时触发。在 UI 中手动点"生成"**不会**自动推送——需要在生成的 summary 上手动点推送按钮。
+
 ### 反馈 bug
 
 Web UI 右上角 💡 按钮 — 写几句就行，后台自动附当前页面 + UA 发给开发者。

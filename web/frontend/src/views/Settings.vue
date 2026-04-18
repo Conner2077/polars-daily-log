@@ -754,10 +754,18 @@
           <el-form-item v-if="outputForm.publisher_name === 'webhook'" label="Webhook URL">
             <el-input v-model="outputForm.webhook_url" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." />
           </el-form-item>
+          <el-form-item v-if="outputForm.publisher_name === 'webhook'" label="消息格式">
+            <el-select v-model="outputForm.webhook_format" style="width: 100%">
+              <el-option label="企业微信" value="wecom" />
+              <el-option label="飞书" value="feishu" />
+              <el-option label="Slack" value="slack" />
+              <el-option label="通用 JSON" value="generic" />
+            </el-select>
+          </el-form-item>
           <el-form-item v-if="outputForm.publisher_name" label="推送方式">
             <el-select v-model="outputForm.auto_publish" style="width: 100%">
               <el-option label="手动推送" :value="false" />
-              <el-option label="生成后自动推送" :value="true" />
+              <el-option label="定时生成后自动推送" :value="true" />
             </el-select>
           </el-form-item>
           <el-form-item label="Prompt 模板">
@@ -1072,7 +1080,7 @@ const outputEditId = ref(null)
 const outputScopeName = ref('')
 const outputForm = ref({
   display_name: '', output_mode: 'single', issue_source: 'jira',
-  llm_engine_name: '', publisher_name: '', webhook_url: '', auto_publish: false,
+  llm_engine_name: '', publisher_name: '', webhook_url: '', webhook_format: 'wecom', auto_publish: false,
   prompt_source: 'summarize', prompt_template: '',
 })
 
@@ -1188,7 +1196,7 @@ async function openAddOutput(scopeName) {
   outputScopeName.value = scopeName
   outputForm.value = {
     display_name: '', output_mode: 'single', issue_source: 'jira',
-    publisher_name: '', webhook_url: '', auto_publish: false,
+    publisher_name: '', webhook_url: '', webhook_format: 'wecom', auto_publish: false,
     prompt_source: 'summarize', prompt_template: '',
   }
   outputDialogVisible.value = true
@@ -1222,6 +1230,7 @@ async function editOutput(row, scope) {
     llm_engine_name: row.llm_engine_name || '',
     publisher_name: row.publisher_name || '',
     webhook_url: pubCfg.url || '',
+    webhook_format: pubCfg.format || 'wecom',
     auto_publish: !!row.auto_publish,
     prompt_source: promptSource,
     prompt_template: row.prompt_template || '',
@@ -1232,7 +1241,7 @@ async function editOutput(row, scope) {
 async function saveOutput() {
   const f = outputForm.value
   const publisherConfig = f.publisher_name === 'webhook'
-    ? JSON.stringify({ url: f.webhook_url })
+    ? JSON.stringify({ url: f.webhook_url, format: f.webhook_format })
     : '{}'
   try {
     if (outputEditMode.value) {

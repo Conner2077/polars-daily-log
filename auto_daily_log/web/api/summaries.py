@@ -164,7 +164,8 @@ def _format_commits(commits: list[dict]) -> str:
 
 
 async def generate_scope(db, engine, scope_name: str, target_date: str,
-                         start_date=None, end_date=None) -> list[dict]:
+                         start_date=None, end_date=None,
+                         *, auto_publish: bool = False) -> list[dict]:
     """Core pipeline: generate all outputs for a scope.
 
     Returns list of created summary rows.
@@ -221,7 +222,8 @@ async def generate_scope(db, engine, scope_name: str, target_date: str,
                 out_engine = await get_engine_by_name(db, None)
 
             rows = await _generate_output(
-                db, out_engine, scope, output, input_data, target_date, period_start, period_end
+                db, out_engine, scope, output, input_data, target_date, period_start, period_end,
+                auto_publish=auto_publish,
             )
             created.extend(rows)
         except Exception as e:
@@ -231,20 +233,24 @@ async def generate_scope(db, engine, scope_name: str, target_date: str,
 
 
 async def _generate_output(db, engine, scope, output, input_data,
-                           target_date, period_start, period_end) -> list[dict]:
+                           target_date, period_start, period_end,
+                           *, auto_publish: bool = False) -> list[dict]:
     """Generate summaries for a single output config."""
     if output["output_mode"] == "per_issue":
         return await _generate_per_issue(
-            db, engine, scope, output, input_data, target_date, period_start, period_end
+            db, engine, scope, output, input_data, target_date, period_start, period_end,
+            auto_publish=auto_publish,
         )
     else:
         return await _generate_single(
-            db, engine, scope, output, input_data, target_date, period_start, period_end
+            db, engine, scope, output, input_data, target_date, period_start, period_end,
+            auto_publish=auto_publish,
         )
 
 
 async def _generate_single(db, engine, scope, output, input_data,
-                            target_date, period_start, period_end) -> list[dict]:
+                            target_date, period_start, period_end,
+                            *, auto_publish: bool = False) -> list[dict]:
     """Generate a single summary for this output."""
     if scope["scope_type"] == "day":
         content = await _run_daily_single(engine, output, input_data)
@@ -268,15 +274,16 @@ async def _generate_single(db, engine, scope, output, input_data,
     row = {"id": summary_id, "scope_name": scope["name"], "output_id": output["id"],
            "date": target_date, "content": content}
 
-    # Auto-publish
-    if output["auto_publish"] and output["publisher_name"]:
+    # Auto-publish only when triggered by scheduler
+    if auto_publish and output["auto_publish"] and output["publisher_name"]:
         await _auto_publish_summary(db, summary_id, output)
 
     return [row]
 
 
 async def _generate_per_issue(db, engine, scope, output, input_data,
-                               target_date, period_start, period_end) -> list[dict]:
+                               target_date, period_start, period_end,
+                               *, auto_publish: bool = False) -> list[dict]:
     """Generate one summary per active issue."""
     issues = await db.fetch_all("SELECT * FROM jira_issues WHERE is_active = 1")
     if not issues:
@@ -351,8 +358,8 @@ async def _generate_per_issue(db, engine, scope, output, input_data,
                "time_spent_sec": time_sec, "content": entry["summary"]}
         created.append(row)
 
-        # Auto-publish
-        if output["auto_publish"] and output["publisher_name"]:
+        # Auto-publish only when triggered by scheduler
+        if auto_publish and output["auto_publish"] and output["publisher_name"]:
             await _auto_publish_summary(db, summary_id, output)
 
     return created
@@ -418,6 +425,38 @@ def _parse_json_array(response: str) -> list[dict]:
     return []
 
 
+async def _publish_summary(db, summary_id: int, publisher, publisher_name: str) -> "PublishResult":
+    """Core publish logic shared by auto-publish and manual publish."""
+    from ...publishers import PublishResult
+    summary = await db.fetch_one("SELECT * FROM summaries WHERE id = ?", (summary_id,))
+    if not summary:
+        return PublishResult(success=False, worklog_id="", platform=publisher_name, raw=None, error="Summary not found")
+
+    issue_key = summary.get("issue_key") or ""
+    _SKIP_KEYS = {"ALL", "DAILY"}
+    if publisher.name == "jira" and (not issue_key or issue_key in _SKIP_KEYS):
+        return PublishResult(success=False, worklog_id="", platform=publisher_name, raw=None, error=f"Issue key '{issue_key}' 不支持推送")
+
+    started = f"{summary['date']}T21:00:00.000+0800"
+    result = await publisher.submit(
+        issue_key=issue_key,
+        time_spent_sec=summary.get("time_spent_sec") or 0,
+        comment=summary.get("content") or "",
+        started=started,
+    )
+    if result.success:
+        await db.execute(
+            "UPDATE summaries SET published_id = ?, published_at = datetime('now'), "
+            "publisher_name = ? WHERE id = ?",
+            (result.worklog_id, publisher_name, summary_id),
+        )
+        await db.execute(
+            "INSERT INTO audit_logs (summary_id, action, after_snapshot) VALUES (?, 'published', ?)",
+            (summary_id, json.dumps({"publisher": publisher_name, "worklog_id": result.worklog_id}, ensure_ascii=False)),
+        )
+    return result
+
+
 async def _auto_publish_summary(db, summary_id: int, output: dict):
     """Auto-publish a summary to its configured publisher."""
     from ...publishers.registry import get_publisher_for_output
@@ -425,29 +464,7 @@ async def _auto_publish_summary(db, summary_id: int, output: dict):
         publisher = await get_publisher_for_output(db, output["id"])
         if not publisher:
             return
-        summary = await db.fetch_one("SELECT * FROM summaries WHERE id = ?", (summary_id,))
-        if not summary or not summary.get("issue_key"):
-            return  # Only per_issue summaries can be published to Jira
-        _SKIP_KEYS = {"ALL", "DAILY"}
-        if summary["issue_key"] in _SKIP_KEYS:
-            return
-        started = f"{summary['date']}T21:00:00.000+0800"
-        result = await publisher.submit(
-            issue_key=summary["issue_key"],
-            time_spent_sec=summary.get("time_spent_sec") or 0,
-            comment=summary.get("content") or "",
-            started=started,
-        )
-        if result.success:
-            await db.execute(
-                "UPDATE summaries SET published_id = ?, published_at = datetime('now'), "
-                "publisher_name = ? WHERE id = ?",
-                (result.worklog_id, output["publisher_name"], summary_id),
-            )
-            await db.execute(
-                "INSERT INTO audit_logs (summary_id, action, after_snapshot) VALUES (?, 'published', ?)",
-                (summary_id, json.dumps({"publisher": output["publisher_name"], "worklog_id": result.worklog_id}, ensure_ascii=False)),
-            )
+        await _publish_summary(db, summary_id, publisher, output["publisher_name"])
     except Exception as e:
         print(f"[Pipeline] Auto-publish failed for summary #{summary_id}: {e}")
 
@@ -658,29 +675,9 @@ async def publish_summary(summary_id: int, request: Request):
     if not publisher:
         raise HTTPException(400, "无法创建推送器")
 
-    _SKIP_KEYS = {"ALL", "DAILY"}
-    issue_key = summary.get("issue_key")
-    if not issue_key or issue_key in _SKIP_KEYS:
-        raise HTTPException(400, f"Issue key '{issue_key}' 不支持推送")
-
-    started = f"{summary['date']}T21:00:00.000+0800"
-    result = await publisher.submit(
-        issue_key=issue_key,
-        time_spent_sec=summary.get("time_spent_sec") or 0,
-        comment=summary.get("content") or "",
-        started=started,
-    )
+    result = await _publish_summary(db, summary_id, publisher, summary["output_publisher"])
     if not result.success:
         raise HTTPException(502, f"推送失败: {result.error}")
-
-    await db.execute(
-        "UPDATE summaries SET published_id = ?, published_at = datetime('now'), publisher_name = ? WHERE id = ?",
-        (result.worklog_id, summary["output_publisher"], summary_id),
-    )
-    await db.execute(
-        "INSERT INTO audit_logs (summary_id, action, after_snapshot) VALUES (?, 'published', ?)",
-        (summary_id, json.dumps({"publisher": summary["output_publisher"], "worklog_id": result.worklog_id}, ensure_ascii=False)),
-    )
     return {"status": "published", "worklog_id": result.worklog_id}
 
 

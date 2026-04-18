@@ -160,6 +160,24 @@ Get-ScheduledTaskInfo -TaskName AutoDailyLogCollector
 
 When you overwrite the tarball to upgrade, nothing under `~/` is touched — upgrades don't lose data.
 
+### Push to messaging platforms (Webhook)
+
+Besides Jira, you can push daily logs to group chats via webhook — WeChat Work, Feishu, Slack, or any HTTP endpoint.
+
+1. **Get the webhook URL** from your group chat bot settings
+2. **Open Settings** > "Scopes & Outputs" > add or edit an output
+3. Set **Push Platform** to "Webhook", paste the URL, pick **Message Format** (WeChat Work / Feishu / Slack / Generic JSON)
+4. Set **Push Mode** to "Manual" or "Auto-push after scheduled generation"
+
+| Format | Body sent |
+|---|---|
+| WeChat Work | `{"msgtype":"markdown","markdown":{"content":"..."}}` |
+| Feishu | `{"msg_type":"text","content":{"text":"..."}}` |
+| Slack | `{"text":"..."}` |
+| Generic JSON | `{"issue_key":"...","time_spent_sec":...,"comment":"...","started":"..."}` |
+
+> **Manual vs auto**: "Auto-push after scheduled generation" only triggers when the scheduler generates logs on its cron schedule. Manually clicking "Generate" in the UI will **not** auto-push — use the push button on the generated summary instead.
+
 ### Report a bug
 
 Click the 💡 button in the top-right of the Web UI. Write a few words; it automatically attaches the current page + UA and sends it to the developer.
