@@ -31,6 +31,7 @@ class OpenAICompatEngine(LLMEngine):
                     "model": self._config.model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.3,
+                    "stream": False,
                 },
             )
             response.raise_for_status()
