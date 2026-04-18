@@ -87,7 +87,7 @@
     >
       <div class="date-group-header" v-if="!isToday || groupedByDate.length > 1">
         <span class="date-label">{{ group.date }}</span>
-        <span class="date-hours">{{ group.totalHours }}h</span>
+        <span v-if="group.totalHours > 0" class="date-hours">{{ group.totalHours }}h</span>
       </div>
 
       <!-- Output cards within each date -->
