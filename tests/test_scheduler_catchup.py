@@ -5,11 +5,13 @@ fail or not produce output despite the server running and collector active.
 """
 import json
 import pytest
+import pytest_asyncio
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from auto_daily_log.scheduler.jobs import DailyWorkflow
 from auto_daily_log.config import AutoApproveConfig
+from auto_daily_log.models.database import Database
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────
@@ -20,7 +22,7 @@ class FakeDB:
     def __init__(self):
         self.tables = {"activities": [], "git_commits": [], "worklog_drafts": [],
                        "audit_logs": [], "jira_issues": [], "settings": [],
-                       "collectors": []}
+                       "collectors": [], "time_scopes": [], "summaries": []}
         self._id = 100
 
     async def fetch_all(self, sql, params=None):
@@ -49,10 +51,14 @@ class FakeDB:
             return self._id
         if sql.strip().upper().startswith("UPDATE"):
             table = self._guess_table(sql)
-            # Simple: mark all matching rows
             for row in self.tables.get(table, []):
                 if "status" in sql.lower() and params:
-                    pass  # simplified — just mark it
+                    pass
+        if sql.strip().upper().startswith("DELETE"):
+            table = self._guess_table(sql)
+            if params:
+                self.tables[table] = [r for r in self.tables.get(table, [])
+                                       if not any(r.get(k) == p for k in r for p in (params if isinstance(params, (list, tuple)) else [params]))]
         return None
 
     def _guess_table(self, sql):
@@ -63,15 +69,18 @@ class FakeDB:
         return "unknown"
 
     def _filter(self, sql, params, rows):
-        # Very crude filter — just check date param presence
         if not params:
             return rows
+        params_list = list(params if isinstance(params, (list, tuple)) else [params])
         result = []
         for r in rows:
             match = True
-            for p in (params if isinstance(params, (list, tuple)) else [params]):
-                if isinstance(p, str) and "date" in r and r["date"] != p:
-                    match = False
+            # Match all string params against any matching field value
+            for p in params_list:
+                if isinstance(p, str):
+                    found_in_any_field = any(r.get(k) == p for k in r if isinstance(r.get(k), str))
+                    if not found_in_any_field:
+                        match = False
             if match:
                 result.append(r)
         return result
@@ -98,12 +107,24 @@ class FakeDB:
         })
         return self._id
 
+    def add_time_scope(self, name, schedule_rule, scope_type="day", enabled=1):
+        self.tables["time_scopes"].append({
+            "name": name, "schedule_rule": schedule_rule,
+            "scope_type": scope_type, "enabled": enabled,
+        })
+
+    def add_summary(self, scope_name, date):
+        self._id += 1
+        self.tables["summaries"].append({
+            "id": self._id, "scope_name": scope_name, "date": date,
+        })
+        return self._id
+
 
 class FakeEngine:
     """Fake LLM engine that returns deterministic responses."""
 
     async def generate(self, prompt, **kwargs):
-        # Return a minimal valid response for the summarizer
         return json.dumps([{
             "issue_key": "TEST-1",
             "time_spent_hours": 1.0,
@@ -115,29 +136,21 @@ class FakeEngine:
 
 @pytest.mark.asyncio
 async def test_daily_summary_no_activities_returns_empty():
-    """If there are no activities and no commits for the target date,
-    generate_drafts should return [] — this is the most common cause
-    of 'missing daily summary' reports."""
     db = FakeDB()
     engine = FakeEngine()
     config = AutoApproveConfig(enabled=False, trigger_time="21:30")
     workflow = DailyWorkflow(db, engine, config)
 
-    # No activities added → should return empty
     with patch("auto_daily_log.collector.git_collector.GitCollector") as mock_gc:
         mock_gc.return_value.collect_today = AsyncMock()
         drafts = await workflow.run_daily_summary("2026-04-15")
 
     assert drafts == []
-    # Verify: no draft was created
     assert len(db.tables["worklog_drafts"]) == 0
 
 
 @pytest.mark.asyncio
 async def test_daily_summary_llm_exception_propagates():
-    """If the LLM engine throws, the exception should NOT be silently
-    swallowed — it must propagate so the caller (scheduler job or
-    catch-up) can log it."""
     db = FakeDB()
     db.add_activity("2026-04-15T10:00:00", "VS Code")
 
@@ -156,12 +169,7 @@ async def test_daily_summary_llm_exception_propagates():
 
 @pytest.mark.asyncio
 async def test_daily_summary_date_mismatch_timezone():
-    """Activities stored with timestamps that don't match the target_date
-    via SQLite date() should result in no drafts — this is a known edge
-    case when timestamps are in UTC but target_date is local."""
     db = FakeDB()
-    # Activity at 2026-04-14T23:30:00 UTC — in UTC+8 this is 2026-04-15 07:30
-    # But SQLite date('2026-04-14T23:30:00') = '2026-04-14'
     db.add_activity("2026-04-14T23:30:00", "VS Code")
 
     config = AutoApproveConfig(enabled=False, trigger_time="21:30")
@@ -170,7 +178,6 @@ async def test_daily_summary_date_mismatch_timezone():
 
     with patch("auto_daily_log.collector.git_collector.GitCollector") as mock_gc:
         mock_gc.return_value.collect_today = AsyncMock()
-        # Asking for 2026-04-15 but activity is date() = 2026-04-14
         drafts = await workflow.run_daily_summary("2026-04-15")
 
     assert drafts == []
@@ -180,141 +187,152 @@ async def test_daily_summary_date_mismatch_timezone():
 
 @pytest.mark.asyncio
 async def test_auto_approve_disabled_is_noop():
-    """When auto_approve is disabled, auto_approve_pending should do nothing."""
     db = FakeDB()
     db.add_draft("2026-04-15", status="pending_review")
     config = AutoApproveConfig(enabled=False, trigger_time="21:30")
     workflow = DailyWorkflow(db, FakeEngine(), config)
 
     await workflow.auto_approve_pending("2026-04-15")
-
-    # Draft should still be pending
     draft = db.tables["worklog_drafts"][0]
     assert draft["status"] == "pending_review"
 
 
 @pytest.mark.asyncio
 async def test_auto_approve_skips_empty_summary():
-    """Drafts with empty summary JSON should NOT be auto-approved."""
     db = FakeDB()
     db.add_draft("2026-04-15", status="pending_review", summary="[]")
     config = AutoApproveConfig(enabled=True, trigger_time="21:30")
     workflow = DailyWorkflow(db, FakeEngine(), config)
 
     await workflow.auto_approve_pending("2026-04-15")
-
-    # Draft should still be pending (empty issues → skipped)
     draft = db.tables["worklog_drafts"][0]
     assert draft["status"] == "pending_review"
 
 
 @pytest.mark.asyncio
 async def test_auto_approve_no_drafts_is_silent():
-    """If there are no pending drafts, auto_approve should succeed silently."""
     db = FakeDB()
     config = AutoApproveConfig(enabled=True, trigger_time="21:30")
     workflow = DailyWorkflow(db, FakeEngine(), config)
 
-    # Should not raise
     await workflow.auto_approve_pending("2026-04-15")
     await workflow.auto_approve_and_submit("2026-04-15")
 
 
-# ─── Tests: scheduler catch-up logic ────────────────────────────────
+# ─── Tests: ScopeScheduler catch-up logic ────────────────────────────
 
 @pytest.mark.asyncio
 async def test_catchup_runs_when_missed():
-    """_scheduler_catchup should call daily_generate when it's past trigger
-    time and no draft exists for today."""
+    """_scheduler_catchup should generate when past trigger time and no summaries exist."""
     from auto_daily_log.app import Application
 
     app = Application.__new__(Application)
     app.db = FakeDB()
+    app.config = MagicMock()
+    app.config.llm = MagicMock()
+    app.db.add_time_scope("daily", '{"time":"18:00"}')
 
-    gen_fn = AsyncMock()
-    approve_fn = AsyncMock()
-
-    # Simulate: it's 20:00, trigger was 18:00, no draft exists
-    with patch("auto_daily_log.app.datetime") as mock_dt:
+    with patch("auto_daily_log.app.datetime") as mock_dt, \
+         patch("auto_daily_log.app.get_llm_engine") as mock_llm, \
+         patch("auto_daily_log.web.api.summaries.generate_scope", new_callable=AsyncMock, return_value=[]) as mock_gen, \
+         patch("auto_daily_log.web.api.worklogs._get_llm_engine_from_settings", new_callable=AsyncMock, return_value=None):
         mock_dt.now.return_value = datetime(2026, 4, 15, 20, 0, 0)
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-        await app._scheduler_catchup(18, 0, gen_fn, approve_fn, 21, 30)
+        mock_llm.return_value = FakeEngine()
+        await app._scheduler_catchup()
 
-    gen_fn.assert_called_once()
-    approve_fn.assert_not_called()  # 20:00 < 21:30 → not yet
+    mock_gen.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_catchup_skips_when_draft_exists():
-    """_scheduler_catchup should NOT re-run daily_generate if a draft
-    already exists for today."""
+    """_scheduler_catchup should NOT re-run if summaries already exist for today."""
     from auto_daily_log.app import Application
 
     app = Application.__new__(Application)
     app.db = FakeDB()
-    app.db.add_draft("2026-04-15", status="pending_review")
+    app.config = MagicMock()
+    app.db.add_time_scope("daily", '{"time":"18:00"}')
+    app.db.add_summary("daily", "2026-04-15")
 
-    gen_fn = AsyncMock()
-
-    with patch("auto_daily_log.app.datetime") as mock_dt:
+    with patch("auto_daily_log.app.datetime") as mock_dt, \
+         patch("auto_daily_log.web.api.summaries.generate_scope", new_callable=AsyncMock) as mock_gen:
         mock_dt.now.return_value = datetime(2026, 4, 15, 20, 0, 0)
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-        await app._scheduler_catchup(18, 0, gen_fn, None, None, None)
+        await app._scheduler_catchup()
 
-    gen_fn.assert_not_called()
+    mock_gen.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_catchup_runs_both_when_late():
-    """If server starts at 22:00 and both jobs missed, both should catch up."""
+    """If two scopes both missed, both should catch up."""
     from auto_daily_log.app import Application
 
     app = Application.__new__(Application)
     app.db = FakeDB()
+    app.config = MagicMock()
+    app.config.llm = MagicMock()
+    app.db.add_time_scope("daily", '{"time":"18:00"}')
+    app.db.add_time_scope("nightly", '{"time":"21:00"}', scope_type="day")
 
-    gen_fn = AsyncMock()
-    approve_fn = AsyncMock()
+    call_count = 0
 
-    with patch("auto_daily_log.app.datetime") as mock_dt:
+    async def _mock_gen(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return []
+
+    with patch("auto_daily_log.app.datetime") as mock_dt, \
+         patch("auto_daily_log.app.get_llm_engine") as mock_llm, \
+         patch("auto_daily_log.web.api.summaries.generate_scope", side_effect=_mock_gen), \
+         patch("auto_daily_log.web.api.worklogs._get_llm_engine_from_settings", new_callable=AsyncMock, return_value=None):
         mock_dt.now.return_value = datetime(2026, 4, 15, 22, 0, 0)
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-        await app._scheduler_catchup(18, 0, gen_fn, approve_fn, 21, 30)
+        mock_llm.return_value = FakeEngine()
+        await app._scheduler_catchup()
 
-    gen_fn.assert_called_once()
-    approve_fn.assert_called_once()
+    assert call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_catchup_gen_failure_doesnt_block_approve():
-    """If daily_generate fails during catch-up, auto_approve should
-    still attempt to run (it might find drafts from a previous run)."""
+    """If one scope fails during catch-up, others should still run."""
     from auto_daily_log.app import Application
 
     app = Application.__new__(Application)
     app.db = FakeDB()
+    app.config = MagicMock()
+    app.config.llm = MagicMock()
+    app.db.add_time_scope("daily", '{"time":"18:00"}')
+    app.db.add_time_scope("nightly", '{"time":"21:00"}', scope_type="day")
 
-    gen_fn = AsyncMock(side_effect=RuntimeError("LLM down"))
-    approve_fn = AsyncMock()
+    calls = []
 
-    with patch("auto_daily_log.app.datetime") as mock_dt:
+    async def _mock_gen(db, engine, scope_name, *args, **kwargs):
+        if scope_name == "daily":
+            raise RuntimeError("LLM down")
+        calls.append(scope_name)
+        return []
+
+    with patch("auto_daily_log.app.datetime") as mock_dt, \
+         patch("auto_daily_log.app.get_llm_engine") as mock_llm, \
+         patch("auto_daily_log.web.api.summaries.generate_scope", side_effect=_mock_gen), \
+         patch("auto_daily_log.web.api.worklogs._get_llm_engine_from_settings", new_callable=AsyncMock, return_value=None):
         mock_dt.now.return_value = datetime(2026, 4, 15, 22, 0, 0)
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        mock_llm.return_value = FakeEngine()
         # Should NOT raise — catch-up wraps in try/except
-        await app._scheduler_catchup(18, 0, gen_fn, approve_fn, 21, 30)
+        await app._scheduler_catchup()
 
-    gen_fn.assert_called_once()
-    approve_fn.assert_called_once()
+    # nightly should still have run despite daily failing
+    assert "nightly" in calls
 
 
 # ─── Tests: scheduler job wrapper exception handling ─────────────────
 
 @pytest.mark.asyncio
 async def test_daily_generate_job_exception_logged():
-    """The daily_generate_job wrapper in _init_scheduler should catch
-    exceptions and log them, not let APScheduler silently swallow them."""
-    # This is a design requirement — verified by checking the code wraps
-    # in try/except. We test the DailyWorkflow directly here since the
-    # actual APScheduler wrapper is hard to unit-test.
     db = FakeDB()
     db.add_activity("2026-04-15T10:00:00")
 
