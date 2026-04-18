@@ -49,6 +49,7 @@ class OutputCreate(BaseModel):
     display_name: str
     output_mode: str = "single"
     issue_source: Optional[str] = None
+    llm_engine_name: Optional[str] = None
     prompt_template: Optional[str] = None
     publisher_name: Optional[str] = None
     publisher_config: str = "{}"
@@ -60,6 +61,7 @@ class OutputUpdate(BaseModel):
     display_name: Optional[str] = None
     output_mode: Optional[str] = None
     issue_source: Optional[str] = None
+    llm_engine_name: Optional[str] = None
     prompt_template: Optional[str] = None
     publisher_name: Optional[str] = None
     publisher_config: Optional[str] = None
@@ -73,11 +75,9 @@ class OutputUpdate(BaseModel):
 @router.get("/scopes")
 async def list_scopes(request: Request):
     db = request.app.state.db
-    import json as _json
     scopes = await db.fetch_all(
         "SELECT * FROM summary_types ORDER BY is_builtin DESC, name"
     )
-    # Attach outputs + derived scope_type to each scope
     result = []
     for s in scopes:
         outputs = await db.fetch_all(
@@ -86,10 +86,9 @@ async def list_scopes(request: Request):
         )
         row = dict(s)
         row["outputs"] = [dict(o) for o in outputs]
-        # Derive scope_type from scope_rule JSON for frontend convenience
         try:
-            row["scope_type"] = _json.loads(row.get("scope_rule") or "{}").get("type", "day")
-        except (_json.JSONDecodeError, TypeError):
+            row["scope_type"] = json.loads(row.get("scope_rule") or "{}").get("type", "day")
+        except (json.JSONDecodeError, TypeError):
             row["scope_type"] = "day"
         result.append(row)
     return result
@@ -105,11 +104,10 @@ async def create_scope(body: ScopeCreate, request: Request):
     )
     if existing:
         raise HTTPException(409, f"总结周期 '{body.name}' 已存在")
-    scope_rule = json.dumps({"type": body.scope_type})
     await db.execute(
         "INSERT INTO summary_types (name, display_name, scope_rule, schedule_rule, enabled) "
         "VALUES (?, ?, ?, ?, ?)",
-        (body.name, body.display_name, scope_rule,
+        (body.name, body.display_name, json.dumps({"type": body.scope_type}),
          body.schedule_rule, 1 if body.enabled else 0),
     )
     await _reload_scheduler(request)
@@ -188,11 +186,11 @@ async def create_output(scope_name: str, body: OutputCreate, request: Request):
         raise HTTPException(400, f"output_mode 必须是 {VALID_OUTPUT_MODES} 之一")
     output_id = await db.execute(
         "INSERT INTO scope_outputs "
-        "(scope_name, display_name, output_mode, issue_source, prompt_template, "
+        "(scope_name, display_name, output_mode, issue_source, llm_engine_name, prompt_template, "
         "publisher_name, publisher_config, auto_publish, enabled) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (scope_name, body.display_name, body.output_mode, body.issue_source,
-         body.prompt_template, body.publisher_name, body.publisher_config,
+         body.llm_engine_name, body.prompt_template, body.publisher_name, body.publisher_config,
          1 if body.auto_publish else 0, 1 if body.enabled else 0),
     )
     return {"id": output_id, "status": "created"}
@@ -217,6 +215,9 @@ async def update_output(output_id: int, body: OutputUpdate, request: Request):
     if body.issue_source is not None:
         updates.append("issue_source = ?")
         params.append(body.issue_source or None)
+    if body.llm_engine_name is not None:
+        updates.append("llm_engine_name = ?")
+        params.append(body.llm_engine_name or None)
     if body.prompt_template is not None:
         updates.append("prompt_template = ?")
         params.append(body.prompt_template or None)
