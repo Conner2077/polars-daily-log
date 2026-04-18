@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS scope_outputs (
     display_name TEXT NOT NULL,
     output_mode TEXT DEFAULT 'single',
     issue_source TEXT,
+    llm_engine_name TEXT,
     prompt_template TEXT,
     publisher_name TEXT,
     publisher_config TEXT DEFAULT '{}',
@@ -160,6 +161,18 @@ CREATE TABLE IF NOT EXISTS summaries (
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_summaries_date ON summaries(date, scope_name);
+
+CREATE TABLE IF NOT EXISTS llm_engines (
+    name TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    protocol TEXT NOT NULL DEFAULT 'openai_compat',
+    api_key TEXT,
+    model TEXT,
+    base_url TEXT,
+    is_default INTEGER DEFAULT 0,
+    enabled INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now'))
+);
 
 CREATE TABLE IF NOT EXISTS scheduler_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -503,6 +516,37 @@ class Database:
                          draft.get("period_start"), draft.get("period_end"),
                          draft["summary"], draft.get("created_at")),
                     )
+
+        # 4. scope_outputs: add llm_engine_name column
+        so_cols = await self.fetch_all("PRAGMA table_info(scope_outputs)")
+        so_col_names = {c["name"] for c in so_cols}
+        if "llm_engine_name" not in so_col_names:
+            await self._conn.execute(
+                "ALTER TABLE scope_outputs ADD COLUMN llm_engine_name TEXT"
+            )
+
+        # 5. Seed llm_engines from settings (idempotent)
+        le_count = await self._conn.execute("SELECT COUNT(*) AS n FROM llm_engines")
+        le_row = await le_count.fetchone()
+        if le_row["n"] == 0:
+            # Migrate current LLM settings into a "default" engine
+            llm_settings = {}
+            for key in ("llm_engine", "llm_api_key", "llm_model", "llm_base_url"):
+                row = await self.fetch_one("SELECT value FROM settings WHERE key = ?", (key,))
+                llm_settings[key] = (row["value"] if row and row.get("value") else "")
+            api_key = llm_settings.get("llm_api_key", "")
+            if api_key:
+                protocol = llm_settings.get("llm_engine") or "openai_compat"
+                model = llm_settings.get("llm_model") or ""
+                base_url = llm_settings.get("llm_base_url") or ""
+                # Derive a display name from model or protocol
+                display = model or protocol
+                await self._conn.execute(
+                    "INSERT OR IGNORE INTO llm_engines "
+                    "(name, display_name, protocol, api_key, model, base_url, is_default, enabled) "
+                    "VALUES ('default', ?, ?, ?, ?, ?, 1, 1)",
+                    (display, protocol, api_key, model, base_url),
+                )
 
     async def close(self) -> None:
         if self._conn:

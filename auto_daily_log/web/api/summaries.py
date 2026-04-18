@@ -169,7 +169,7 @@ async def generate_scope(db, engine, scope_name: str, target_date: str,
 
     Returns list of created summary rows.
     """
-    scope = await db.fetch_one("SELECT * FROM summary_types WHERE name = ?", (scope_name,))
+    scope = await db.fetch_one("SELECT * FROM time_scopes WHERE name = ?", (scope_name,))
     if not scope:
         raise ValueError(f"Scope '{scope_name}' not found")
 
@@ -180,20 +180,12 @@ async def generate_scope(db, engine, scope_name: str, target_date: str,
     if not outputs:
         return []
 
-    # summary_types stores scope_rule as JSON {"type":"day"}, parse it.
-    import json as _json
-    scope_type = "day"
-    try:
-        scope_type = _json.loads(scope["scope_rule"]).get("type", "day")
-    except (TypeError, _json.JSONDecodeError):
-        pass
-
+    scope_type = scope["scope_type"]
     period_start, period_end = _resolve_scope_period(
         scope_type, target_date, start_date, end_date
     )
 
     # Dedup: delete existing summaries for the same scope + period.
-    # One scope + one calendar period = one summary. Regeneration overwrites.
     existing = await db.fetch_all(
         "SELECT id FROM summaries WHERE scope_name = ? AND period_start = ? AND period_end = ?",
         (scope_name, period_start, period_end),
@@ -214,11 +206,22 @@ async def generate_scope(db, engine, scope_name: str, target_date: str,
 
     created: list[dict] = []
 
-    # 2. Fan-out to each output
+    # 2. Fan-out to each output (each output can use its own LLM engine)
+    from ...summarizer.engine_registry import get_engine_by_name
     for output in outputs:
         try:
+            # Per-output engine override; fallback to caller-provided engine, then default
+            out_engine = engine
+            engine_name = output.get("llm_engine_name")
+            if engine_name:
+                resolved = await get_engine_by_name(db, engine_name)
+                if resolved:
+                    out_engine = resolved
+            elif not out_engine:
+                out_engine = await get_engine_by_name(db, None)
+
             rows = await _generate_output(
-                db, engine, scope, output, input_data, target_date, period_start, period_end
+                db, out_engine, scope, output, input_data, target_date, period_start, period_end
             )
             created.extend(rows)
         except Exception as e:
@@ -243,10 +246,10 @@ async def _generate_output(db, engine, scope, output, input_data,
 async def _generate_single(db, engine, scope, output, input_data,
                             target_date, period_start, period_end) -> list[dict]:
     """Generate a single summary for this output."""
-    if scope_type == "day":
+    if scope["scope_type"] == "day":
         content = await _run_daily_single(engine, output, input_data)
     else:
-        content = await _run_period_single(engine, output, input_data, scope_type)
+        content = await _run_period_single(engine, output, input_data, scope["scope_type"])
 
     if not content:
         return []
@@ -280,7 +283,7 @@ async def _generate_per_issue(db, engine, scope, output, input_data,
         return []
 
     # Build shared context
-    if scope_type == "day":
+    if scope["scope_type"] == "day":
         activities_text = _compress_activities(input_data["activities"])
         commits_text = _format_commits(input_data["commits"])
     else:
@@ -367,9 +370,12 @@ async def _run_daily_single(engine, output, input_data) -> str:
         git_commits=commits_text,
     )
     if not engine:
-        # Fallback: raw text
         return f"Activities:\n{activities_text}\n\nCommits:\n{commits_text}"
-    return (await engine.generate(prompt)).strip()
+    try:
+        return (await engine.generate(prompt)).strip()
+    except Exception as e:
+        print(f"[Pipeline] LLM failed for single output, using raw fallback: {e}")
+        return f"Activities:\n{activities_text}\n\nCommits:\n{commits_text}"
 
 
 async def _run_period_single(engine, output, input_data, scope_type) -> str:
@@ -454,20 +460,13 @@ async def generate_summary(body: GenerateScopeRequest, request: Request):
     """Generate all outputs for a scope."""
     db = request.app.state.db
 
-    scope = await db.fetch_one("SELECT * FROM summary_types WHERE name = ?", (body.scope_name,))
+    scope = await db.fetch_one("SELECT * FROM time_scopes WHERE name = ?", (body.scope_name,))
     if not scope:
         raise HTTPException(404, f"总结周期 '{body.scope_name}' 不存在")
 
-    import json as _json2
-    scope_type = "day"
-    try:
-        scope_type = _json2.loads(scope["scope_rule"]).get("type", "day")
-    except (TypeError, _json2.JSONDecodeError):
-        pass
-
     target = body.target_date or date_mod.today().isoformat()
     period_start, period_end = _resolve_scope_period(
-        scope_type, target, body.start_date, body.end_date
+        scope["scope_type"], target, body.start_date, body.end_date
     )
 
     # Delete existing summaries for this scope+period if force
@@ -489,7 +488,7 @@ async def generate_summary(body: GenerateScopeRequest, request: Request):
 
     # Activity backfill (same as old summarizer)
     activity_summarizer = getattr(request.app.state, "activity_summarizer", None)
-    if activity_summarizer and scope_type == "day":
+    if activity_summarizer and scope["scope_type"] == "day":
         try:
             processed = await activity_summarizer.backfill_for_date(target, timeout_sec=60)
             print(f"[Pipeline] Activity backfill processed {processed} row(s)")
@@ -497,7 +496,7 @@ async def generate_summary(body: GenerateScopeRequest, request: Request):
             print(f"[Pipeline] Activity backfill failed (non-fatal): {e}")
 
     # Git collect
-    if scope_type == "day":
+    if scope["scope_type"] == "day":
         try:
             from ...collector.git_collector import GitCollector
             collector = GitCollector(db)

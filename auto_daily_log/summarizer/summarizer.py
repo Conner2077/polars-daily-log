@@ -114,7 +114,9 @@ class WorklogSummarizer:
                 hours = float(item.get("time_spent_hours", 0))
             except (TypeError, ValueError):
                 continue
-            key = item.get("issue_key", "OTHER") or "OTHER"
+            key = item.get("issue_key") or ""
+            if not key or key == "OTHER":
+                continue  # Discard unmapped entries — already in full_summary
             summary_text = (item.get("summary") or "").strip()
             if key in merged:
                 merged[key]["time_spent_hours"] = round(merged[key]["time_spent_hours"] + hours, 2)

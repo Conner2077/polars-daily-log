@@ -109,7 +109,7 @@ class DailyWorkflow:
                 except (json.JSONDecodeError, TypeError):
                     continue
 
-                _SKIP_KEYS = {"OTHER", "ALL", "DAILY"}
+                _SKIP_KEYS = {"ALL", "DAILY"}
                 for i, issue in enumerate(issues):
                     if issue.get("jira_worklog_id"):
                         continue

@@ -165,49 +165,119 @@
     <div v-show="activeTab === 'llm'" class="tab-content">
       <div class="settings-card">
         <h3 class="card-title">LLM 引擎</h3>
-        <p class="card-description">用于每日总结、工时提炼与活动摘要的模型。</p>
+        <p class="card-description">
+          可添加多个引擎，不同的输出类型可选择不同的模型。标记为「默认」的引擎用于未指定引擎的场景。
+        </p>
 
-        <!-- Quick fill buttons -->
-        <div class="quick-fill-row">
-          <span class="quick-fill-label">快速填充</span>
-          <el-button
-            v-for="p in presets" :key="p.name"
-            size="small" round
-            @click="applyPreset(p)"
-          >{{ p.name }}</el-button>
+        <el-table :data="llmEngines" style="width: 100%">
+          <el-table-column label="名称" width="140">
+            <template #default="{ row }">
+              {{ row.display_name }}
+              <el-tag v-if="row.is_default" size="small" type="success" style="margin-left: 4px">默认</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="协议" width="120">
+            <template #default="{ row }">
+              <span class="cell-mono">{{ engineProtocolLabel(row.protocol) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="model" label="模型" width="160">
+            <template #default="{ row }"><span class="cell-mono">{{ row.model || '—' }}</span></template>
+          </el-table-column>
+          <el-table-column label="Key" width="140">
+            <template #default="{ row }">
+              <span v-if="row._has_key" class="cell-mono" style="font-size: 11px; color: #52c41a">{{ row._key_hint }}</span>
+              <span v-else style="color: var(--el-color-danger); font-size: 12px">未设置</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="Base URL" min-width="200">
+            <template #default="{ row }"><span class="cell-mono" style="font-size: 12px">{{ row.base_url || '默认' }}</span></template>
+          </el-table-column>
+          <el-table-column label="操作" width="220">
+            <template #default="{ row }">
+              <el-button size="small" round @click="editLLMEngine(row)">编辑</el-button>
+              <el-button size="small" round @click="checkEngine(row.name)" :loading="checkingEngine === row.name">测试</el-button>
+              <el-popconfirm
+                v-if="!row.is_default"
+                :title="`删除引擎「${row.display_name}」？`"
+                confirm-button-text="删除" cancel-button-text="取消"
+                @confirm="deleteLLMEngine(row.name)"
+              >
+                <template #reference>
+                  <el-button size="small" round class="danger-btn">删除</el-button>
+                </template>
+              </el-popconfirm>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div style="margin-top: 16px">
+          <el-button round @click="openAddEngine">+ 添加引擎</el-button>
         </div>
+      </div>
+
+      <div class="settings-card" style="margin-top: 20px">
+        <h3 class="card-title">用途绑定</h3>
+        <p class="card-description">为不同用途指定引擎。留空或选「默认」使用标记为默认的引擎。总结输出可在「总结周期」tab 单独配置。</p>
 
         <el-form label-position="top" class="settings-form two-col">
-          <el-form-item label="API 协议">
-            <el-select v-model="settings.llm_engine" style="width: 100%">
-              <el-option label="OpenAI 兼容（OpenAI / Kimi / DeepSeek / 智谱 / …）" value="openai_compat" />
-              <el-option label="Anthropic（Claude）" value="anthropic" />
-              <el-option label="Ollama 本地" value="ollama" />
+          <el-form-item label="Chat 对话">
+            <el-select v-model="settings.llm_engine_for_chat" style="width: 100%" clearable placeholder="使用默认引擎">
+              <el-option v-for="e in llmEngines" :key="e.name" :label="`${e.display_name}${e.is_default ? ' (默认)' : ''}`" :value="e.name" />
             </el-select>
           </el-form-item>
-          <el-form-item label="Model">
-            <el-input v-model="settings.llm_model" :placeholder="modelPlaceholder" />
-          </el-form-item>
-          <el-form-item label="API Key" class="full-col">
-            <el-input v-model="settings.llm_api_key" type="password" show-password placeholder="留空则使用安装时配置的内置模型（若有）" />
-          </el-form-item>
-          <el-form-item label="Base URL" class="full-col">
-            <el-input v-model="settings.llm_base_url" :placeholder="basePlaceholder" />
-            <div class="form-hint">
-              填<strong>根地址</strong>，不要带 <code>/chat/completions</code> 等接口路径。留空用默认：
-              <code>{{ basePlaceholder }}</code>
-            </div>
-          </el-form-item>
-          <el-form-item class="full-col">
-            <el-button round :loading="checkingKey" @click="checkLLMKey">
-              {{ checkingKey ? '测试中...' : '测试连接' }}
-            </el-button>
-            <span v-if="keyCheckResult" class="inline-status" :class="{ success: keyCheckResult.valid, danger: !keyCheckResult.valid }">
-              {{ keyCheckResult.message }}
-            </span>
+          <el-form-item label="活动摘要（OCR 猜测）">
+            <el-select v-model="settings.llm_engine_for_activity" style="width: 100%" clearable placeholder="使用默认引擎">
+              <el-option v-for="e in llmEngines" :key="e.name" :label="`${e.display_name}${e.is_default ? ' (默认)' : ''}`" :value="e.name" />
+            </el-select>
           </el-form-item>
         </el-form>
       </div>
+
+      <!-- Engine add/edit dialog -->
+      <el-dialog v-model="engineDialogVisible" :title="engineEditMode ? '编辑引擎' : '添加引擎'" width="520px" :close-on-click-modal="false">
+        <el-form label-position="top" class="settings-form">
+          <el-form-item v-if="!engineEditMode" label="引擎标识（唯一，英文）">
+            <el-input v-model="engineForm.name" placeholder="e.g. kimi, claude, deepseek" />
+          </el-form-item>
+          <el-form-item label="显示名称">
+            <el-input v-model="engineForm.display_name" placeholder="e.g. Kimi K2.5" />
+          </el-form-item>
+          <el-form-item label="API 协议">
+            <el-select v-model="engineForm.protocol" style="width: 100%">
+              <el-option label="OpenAI 兼容（Kimi / DeepSeek / 智谱 / …）" value="openai_compat" />
+              <el-option label="Anthropic（Claude / Kimi Anthropic 模式）" value="anthropic" />
+              <el-option label="Ollama 本地" value="ollama" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="API Key">
+            <el-input
+              v-model="engineForm.api_key"
+              type="password" show-password
+              :placeholder="engineEditMode && engineForm._has_key ? '已设置（留空保持不变）' : '输入 API Key'"
+            />
+          </el-form-item>
+          <el-form-item label="Model">
+            <el-input v-model="engineForm.model" placeholder="e.g. moonshot-v1-8k, claude-sonnet-4-20250514" />
+          </el-form-item>
+          <el-form-item label="Base URL（留空使用默认）">
+            <el-input v-model="engineForm.base_url" placeholder="e.g. https://api.kimi.com/coding" />
+          </el-form-item>
+          <div class="switch-group" style="margin-top: 8px">
+            <div class="switch-row">
+              <el-switch v-model="engineForm.is_default" />
+              <div class="switch-meta">
+                <div class="switch-label">设为默认引擎</div>
+                <div class="switch-hint">未指定引擎时使用此引擎</div>
+              </div>
+            </div>
+          </div>
+        </el-form>
+        <template #footer>
+          <el-button round @click="engineDialogVisible = false">取消</el-button>
+          <el-button type="primary" round @click="saveLLMEngine">{{ engineEditMode ? '保存' : '创建' }}</el-button>
+        </template>
+      </el-dialog>
     </div>
 
     <!-- Prompts Tab -->
@@ -665,6 +735,11 @@
               <el-option label="按 Issue 逐条生成" value="per_issue" />
             </el-select>
           </el-form-item>
+          <el-form-item label="LLM 引擎">
+            <el-select v-model="outputForm.llm_engine_name" style="width: 100%" clearable placeholder="使用默认引擎">
+              <el-option v-for="e in llmEngines" :key="e.name" :label="`${e.display_name}${e.is_default ? ' (默认)' : ''}`" :value="e.name" />
+            </el-select>
+          </el-form-item>
           <el-form-item v-if="outputForm.output_mode === 'per_issue'" label="Issue 来源">
             <el-select v-model="outputForm.issue_source" style="width: 100%">
               <el-option label="Jira" value="jira" />
@@ -870,6 +945,89 @@ const ipUrl = `http://127.0.0.1:${windowPort}/${window.location.hash}`
 
 const checkingKey = ref(false)
 const keyCheckResult = ref(null)
+
+// ─── LLM Engines (multi-engine) ──────────────────────────────────────
+const llmEngines = ref([])
+const engineDialogVisible = ref(false)
+const engineEditMode = ref(false)
+const checkingEngine = ref(null)
+const engineForm = ref({
+  name: '', display_name: '', protocol: 'openai_compat',
+  api_key: '', model: '', base_url: '', is_default: false,
+})
+
+function engineProtocolLabel(p) {
+  return { openai_compat: 'OpenAI 兼容', anthropic: 'Anthropic', ollama: 'Ollama' }[p] || p
+}
+
+async function loadLLMEngines() {
+  try {
+    const r = await api.getLLMEngines()
+    llmEngines.value = r.data
+  } catch { llmEngines.value = [] }
+}
+
+function openAddEngine() {
+  engineEditMode.value = false
+  engineForm.value = {
+    name: '', display_name: '', protocol: 'openai_compat',
+    api_key: '', model: '', base_url: '', is_default: false,
+  }
+  engineDialogVisible.value = true
+}
+
+function editLLMEngine(row) {
+  engineEditMode.value = true
+  engineForm.value = {
+    name: row.name, display_name: row.display_name, protocol: row.protocol,
+    api_key: '', _has_key: !!row._has_key, model: row.model || '', base_url: row.base_url || '',
+    is_default: !!row.is_default,
+  }
+  engineDialogVisible.value = true
+}
+
+async function saveLLMEngine() {
+  const f = engineForm.value
+  try {
+    if (engineEditMode.value) {
+      const data = { display_name: f.display_name, protocol: f.protocol, model: f.model, base_url: f.base_url, is_default: f.is_default }
+      if (f.api_key) data.api_key = f.api_key  // only send if changed
+      await api.updateLLMEngine(f.name, data)
+      ElMessage.success(`已更新「${f.display_name}」`)
+    } else {
+      if (!f.name || !f.display_name) { ElMessage.warning('请填写引擎标识和名称'); return }
+      await api.createLLMEngine(f)
+      ElMessage.success(`已添加「${f.display_name}」`)
+    }
+    engineDialogVisible.value = false
+    await loadLLMEngines()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '操作失败')
+  }
+}
+
+async function deleteLLMEngine(name) {
+  try {
+    await api.deleteLLMEngine(name)
+    ElMessage.success('已删除')
+    await loadLLMEngines()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '删除失败')
+  }
+}
+
+async function checkEngine(name) {
+  checkingEngine.value = name
+  try {
+    const r = await api.checkLLMEngine(name)
+    if (r.data.status === 'ok') ElMessage.success(`连接成功: ${r.data.response}`)
+    else ElMessage.error(`连接失败: ${r.data.error}`)
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '测试失败')
+  } finally {
+    checkingEngine.value = null
+  }
+}
 const jiraLogin = ref({ mobile: '', password: '' })
 const jiraLogging = ref(false)
 const jiraLoginResult = ref(null)
@@ -881,6 +1039,7 @@ const settings = ref({
   llm_engine: 'openai_compat', llm_api_key: '', llm_model: '', llm_base_url: '',
   summarize_prompt: '', auto_approve_prompt: '', period_summary_prompt: '', activity_summary_prompt: '',
   scheduler_enabled: true, scheduler_trigger_time: '18:00',
+  llm_engine_for_chat: '', llm_engine_for_activity: '',
   activity_retention_days: 7, recycle_retention_days: 30,
 })
 // Dirty tracking: snapshot after load, compare on every change.
@@ -913,7 +1072,7 @@ const outputEditId = ref(null)
 const outputScopeName = ref('')
 const outputForm = ref({
   display_name: '', output_mode: 'single', issue_source: 'jira',
-  publisher_name: '', webhook_url: '', auto_publish: false,
+  llm_engine_name: '', publisher_name: '', webhook_url: '', auto_publish: false,
   prompt_source: 'summarize', prompt_template: '',
 })
 
@@ -1023,7 +1182,8 @@ async function deleteScope(name) {
   }
 }
 
-function openAddOutput(scopeName) {
+async function openAddOutput(scopeName) {
+  await loadLLMEngines()
   outputEditMode.value = false
   outputScopeName.value = scopeName
   outputForm.value = {
@@ -1040,7 +1200,8 @@ function onPromptSourceChange(val) {
   }
 }
 
-function editOutput(row, scope) {
+async function editOutput(row, scope) {
+  await loadLLMEngines()
   outputEditMode.value = true
   outputEditId.value = row.id
   outputScopeName.value = scope.name
@@ -1058,6 +1219,7 @@ function editOutput(row, scope) {
     display_name: row.display_name,
     output_mode: row.output_mode || 'single',
     issue_source: row.issue_source || 'jira',
+    llm_engine_name: row.llm_engine_name || '',
     publisher_name: row.publisher_name || '',
     webhook_url: pubCfg.url || '',
     auto_publish: !!row.auto_publish,
@@ -1078,6 +1240,7 @@ async function saveOutput() {
         display_name: f.display_name,
         output_mode: f.output_mode,
         issue_source: f.output_mode === 'per_issue' ? f.issue_source : null,
+        llm_engine_name: f.llm_engine_name || null,
         publisher_name: f.publisher_name || null,
         publisher_config: publisherConfig,
         auto_publish: f.auto_publish,
@@ -1090,6 +1253,7 @@ async function saveOutput() {
         display_name: f.display_name,
         output_mode: f.output_mode,
         issue_source: f.output_mode === 'per_issue' ? f.issue_source : null,
+        llm_engine_name: f.llm_engine_name || null,
         publisher_name: f.publisher_name || null,
         publisher_config: publisherConfig,
         auto_publish: f.auto_publish,
@@ -1477,6 +1641,7 @@ onMounted(async () => {
   loadCollectors()
   loadScopes()
   loadSchedulerRuns()
+  loadLLMEngines()
   // Updates: cached check is cheap; backups list is local file scan.
   checkUpdate(false)
   loadBackups()

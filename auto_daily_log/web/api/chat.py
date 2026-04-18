@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from ...summarizer import prompt as prompt_module
 from ...summarizer.prompt import render_prompt
 from .chat_retrieval import extract_issue_keys, parse_date_anchors
-from .worklogs import _get_llm_engine_from_settings
+from ...summarizer.engine_registry import get_engine_by_name as _get_engine_by_name
 
 router = APIRouter(tags=["chat"])
 
@@ -155,7 +155,10 @@ async def chat(body: ChatRequest, request: Request):
         question=user_question or "(空)",
     )
 
-    llm = await _get_llm_engine_from_settings(db)
+    # Use chat-bound engine, fallback to default
+    chat_engine_row = await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_engine_for_chat'")
+    chat_engine_name = (chat_engine_row["value"] if chat_engine_row and chat_engine_row.get("value") else None)
+    llm = await _get_engine_by_name(db, chat_engine_name)
 
     # Producer runs the LLM + persist pipeline as a DETACHED task, so a
     # mid-stream client disconnect (refresh, nav-away, abort button) does
@@ -405,7 +408,10 @@ async def extract_worklog(session_id: str, body: ExtractRequest, request: Reques
         full_summary=transcript or "(无)",
     )
 
-    llm = await _get_llm_engine_from_settings(db)
+    chat_row = await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_engine_for_chat'")
+    llm = await _get_engine_by_name(db, chat_row["value"] if chat_row and chat_row.get("value") else None)
+    if not llm:
+        raise HTTPException(400, "未配置 LLM 引擎")
     raw = await llm.generate(prompt)
 
     parsed = _parse_json_array(raw)
@@ -450,7 +456,7 @@ async def push_to_jira(session_id: str, body: PushRequest, request: Request):
 
     submitted: list[dict] = []
     failed: list[dict] = []
-    skip_keys = {"OTHER", "ALL", "DAILY"}
+    skip_keys = {"ALL", "DAILY"}
 
     for draft in body.drafts or []:
         issue_key = str(draft.get("issue_key") or "").strip()

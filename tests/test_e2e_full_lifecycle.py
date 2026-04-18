@@ -475,33 +475,42 @@ async def test_full_lifecycle(env):
 
     app_inst = Application.__new__(Application)
     app_inst.db = db
+    app_inst.config = MagicMock()
+    app_inst.config.llm = MagicMock()
 
-    # Simulate: server starts after both trigger times, but drafts exist
+    # Insert a summary row so catchup thinks today is already generated
+    outputs = await db.fetch_all("SELECT id FROM scope_outputs WHERE scope_name = 'daily' LIMIT 1")
+    await db.execute(
+        "INSERT INTO summaries (scope_name, output_id, date, period_start, period_end, content) "
+        "VALUES ('daily', ?, ?, ?, ?, 'catchup test')",
+        (outputs[0]["id"], TODAY, TODAY, TODAY),
+    )
+
+    # Simulate: server starts after trigger time, but summaries exist
     # → catch-up should NOT re-run (already have output)
-    gen_fn = AsyncMock()
-    approve_fn = AsyncMock()
-
     now = datetime.now().replace(hour=22, minute=0, second=0)
-    with patch("auto_daily_log.app.datetime") as mock_dt:
+    with patch("auto_daily_log.app.datetime") as mock_dt, \
+         patch("auto_daily_log.web.api.summaries.generate_scope", new_callable=AsyncMock) as mock_gen:
         mock_dt.now.return_value = now
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-        await app_inst._scheduler_catchup(18, 0, gen_fn, approve_fn, 21, 30)
+        await app_inst._scheduler_catchup()
 
-    # Should NOT re-run because drafts already exist for today
-    gen_fn.assert_not_called()
+    # Should NOT re-run because summaries already exist for today
+    mock_gen.assert_not_called()
 
-    # Now test the opposite: remove all today's drafts, catch-up should fire
-    await db.execute("DELETE FROM worklog_drafts WHERE date = ?", (TODAY,))
-    gen_fn2 = AsyncMock()
-    approve_fn2 = AsyncMock()
+    # Now remove summaries for today, catch-up should fire
+    await db.execute("DELETE FROM summaries WHERE date = ?", (TODAY,))
 
-    with patch("auto_daily_log.app.datetime") as mock_dt:
+    with patch("auto_daily_log.app.datetime") as mock_dt, \
+         patch("auto_daily_log.app.get_llm_engine") as mock_llm, \
+         patch("auto_daily_log.web.api.summaries.generate_scope", new_callable=AsyncMock, return_value=[]) as mock_gen2, \
+         patch("auto_daily_log.web.api.worklogs._get_llm_engine_from_settings", new_callable=AsyncMock, return_value=None):
         mock_dt.now.return_value = now
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-        await app_inst._scheduler_catchup(18, 0, gen_fn2, approve_fn2, 21, 30)
+        mock_llm.return_value = MagicMock()
+        await app_inst._scheduler_catchup()
 
-    gen_fn2.assert_called_once()
-    approve_fn2.assert_called_once()
+    mock_gen2.assert_called_once()
 
     # ════════════════════════════════════════════════════════════════
     # Phase 11: Delete draft

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, Response
 from starlette.responses import FileResponse
 from ..models.database import Database
-from .api import settings, issues, activities, worklogs, dashboard, git_repos, search, ingest, feedback, chat, machines, updates, summary_types
+from .api import settings, issues, activities, worklogs, dashboard, git_repos, search, ingest, feedback, chat, machines, updates, summary_types, scopes, summaries, scheduler_runs, llm_engines
 
 def create_app(db: Database) -> FastAPI:
     app = FastAPI(title="Polars Daily Log", version="0.1.0")
@@ -19,6 +19,10 @@ def create_app(db: Database) -> FastAPI:
     app.include_router(machines.router, prefix="/api")
     app.include_router(updates.router, prefix="/api")
     app.include_router(summary_types.router, prefix="/api")
+    app.include_router(scopes.router, prefix="/api")
+    app.include_router(summaries.router, prefix="/api")
+    app.include_router(scheduler_runs.router, prefix="/api")
+    app.include_router(llm_engines.router, prefix="/api")
     from fastapi.staticfiles import StaticFiles
     from pathlib import Path
     # Resolve the frontend dist directory.

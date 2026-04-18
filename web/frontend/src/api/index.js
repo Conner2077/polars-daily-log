@@ -67,11 +67,40 @@ export default {
     if (sourceType) params.source_type = sourceType
     return api.get('/search', { params })
   },
-  // Summary types CRUD
+  // Summary types CRUD (legacy — kept for backward compat)
   getSummaryTypes: () => api.get('/summary-types'),
   createSummaryType: (data) => api.post('/summary-types', data),
   updateSummaryType: (name, data) => api.put(`/summary-types/${name}`, data),
   deleteSummaryType: (name) => api.delete(`/summary-types/${name}`),
+  // Scopes + Outputs CRUD (new pipeline)
+  getScopes: () => api.get('/scopes'),
+  createScope: (data) => api.post('/scopes', data),
+  updateScope: (name, data) => api.put(`/scopes/${name}`, data),
+  deleteScope: (name) => api.delete(`/scopes/${name}`),
+  getScopeOutputs: (scopeName) => api.get(`/scopes/${scopeName}/outputs`),
+  createScopeOutput: (scopeName, data) => api.post(`/scopes/${scopeName}/outputs`, data),
+  updateScopeOutput: (outputId, data) => api.put(`/scopes/outputs/${outputId}`, data),
+  deleteScopeOutput: (outputId) => api.delete(`/scopes/outputs/${outputId}`),
+  // Summaries (new pipeline)
+  getSummaries: (params = {}) => api.get('/summaries', { params }),
+  getSummary: (id) => api.get(`/summaries/${id}`),
+  updateSummary: (id, data) => api.patch(`/summaries/${id}`, data),
+  publishSummary: (id) => api.post(`/summaries/${id}/publish`),
+  deleteSummary: (id) => api.delete(`/summaries/${id}`),
+  getSummaryAudit: (id) => api.get(`/summaries/${id}/audit`),
+  generateScopeSummary: (scopeName, targetDate = null, force = false) => {
+    const data = { scope_name: scopeName, force }
+    if (targetDate) data.target_date = targetDate
+    return api.post('/summaries/generate', data)
+  },
+  // LLM engines CRUD
+  getLLMEngines: () => api.get('/llm-engines'),
+  createLLMEngine: (data) => api.post('/llm-engines', data),
+  updateLLMEngine: (name, data) => api.put(`/llm-engines/${name}`, data),
+  deleteLLMEngine: (name) => api.delete(`/llm-engines/${name}`),
+  checkLLMEngine: (name) => api.post(`/llm-engines/${name}/check`),
+  // Scheduler runs
+  getSchedulerRuns: (params = {}) => api.get('/scheduler/runs', { params }),
   // Self-update endpoints — driven by the Settings → 自动更新 tab
   // and the global "new version available" banner in App.vue.
   checkForUpdate: (force = false) => api.get('/updates/check', { params: { force } }),

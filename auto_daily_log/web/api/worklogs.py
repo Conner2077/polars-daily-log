@@ -497,7 +497,7 @@ async def submit_to_platform(draft_id: int, request: Request):
     except (json.JSONDecodeError, TypeError):
         raise HTTPException(400, "Invalid summary format, expected JSON array")
 
-    _SKIP_KEYS = {"OTHER", "ALL", "DAILY"}
+    _SKIP_KEYS = {"ALL", "DAILY"}
     results = []
     for i, issue in enumerate(issues):
         if issue.get("jira_worklog_id"):

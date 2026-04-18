@@ -223,10 +223,8 @@ class Application:
             t0 = _time.monotonic()
             today = datetime.now().strftime("%Y-%m-%d")
             try:
-                from .web.api.worklogs import _get_llm_engine_from_settings
-                engine = await _get_llm_engine_from_settings(self.db)
-                if not engine:
-                    engine = get_llm_engine(self.config.llm)
+                from .summarizer.engine_registry import get_engine_by_name
+                engine = await get_engine_by_name(self.db, None)  # default engine
 
                 # Activity backfill before daily generation
                 scope = await self.db.fetch_one(
@@ -248,15 +246,7 @@ class Application:
                         print(f"[ScopeScheduler] git collect failed (non-fatal): {e}")
 
                 from .web.api.summaries import generate_scope
-                # Delete existing summaries for this scope+date (force overwrite)
-                existing = await self.db.fetch_all(
-                    "SELECT id FROM summaries WHERE scope_name = ? AND date = ?",
-                    (scope_name, today),
-                )
-                for ex in existing:
-                    await self.db.execute("DELETE FROM audit_logs WHERE summary_id = ?", (ex["id"],))
-                    await self.db.execute("DELETE FROM summaries WHERE id = ?", (ex["id"],))
-
+                # generate_scope handles dedup internally (deletes existing for same period)
                 created = await generate_scope(self.db, engine, scope_name, today)
                 duration_ms = int((_time.monotonic() - t0) * 1000)
                 print(f"[ScopeScheduler] generate completed for '{scope_name}': {len(created)} summaries in {duration_ms}ms")
@@ -274,12 +264,15 @@ class Application:
                     ps, pe = _resolve_scope_period(scope["scope_type"], today)
                     await _dual_write_drafts(self.db, created, scope_name, today, ps, pe)
 
-                # Index for search
-                emb_engine = get_embedding_engine(self.config.llm, self.config.embedding)
-                if emb_engine:
-                    indexer = Indexer(self.db, emb_engine)
-                    await indexer.index_worklogs(today)
-                    await indexer.index_commits(today)
+                # Index for search (non-fatal — empty config key is common)
+                try:
+                    emb_engine = get_embedding_engine(self.config.llm, self.config.embedding)
+                    if emb_engine:
+                        indexer = Indexer(self.db, emb_engine)
+                        await indexer.index_worklogs(today)
+                        await indexer.index_commits(today)
+                except Exception as e:
+                    print(f"[ScopeScheduler] search indexing failed (non-fatal): {e}")
 
             except Exception as e:
                 duration_ms = int((_time.monotonic() - t0) * 1000)
@@ -432,10 +425,8 @@ class Application:
             print(f"[ScopeScheduler:Catchup] '{scope['name']}' missed for {today}, running now")
             t0 = _time.monotonic()
             try:
-                from .web.api.worklogs import _get_llm_engine_from_settings
-                engine = await _get_llm_engine_from_settings(self.db)
-                if not engine:
-                    engine = get_llm_engine(self.config.llm)
+                from .summarizer.engine_registry import get_engine_by_name
+                engine = await get_engine_by_name(self.db, None)  # default engine
 
                 from .web.api.summaries import generate_scope
                 created = await generate_scope(self.db, engine, scope["name"], today)
@@ -472,8 +463,13 @@ class Application:
 
         async def _summarizer_get_engine():
             try:
-                from .web.api.worklogs import _get_llm_engine_from_settings
-                return await _get_llm_engine_from_settings(self.db)
+                from .summarizer.engine_registry import get_engine_by_name
+                # Use the engine bound to activity summary, fallback to default
+                row = await self.db.fetch_one(
+                    "SELECT value FROM settings WHERE key = 'llm_engine_for_activity'"
+                )
+                engine_name = (row["value"] if row and row.get("value") else None)
+                return await get_engine_by_name(self.db, engine_name)
             except Exception as e:
                 print(f"[ActivitySummarizer] engine lookup failed: {e}")
                 return None
@@ -494,6 +490,7 @@ class Application:
 
         app = create_app(self.db)
         app.state.config = self.config
+        app.state.application = self  # for scheduler hot-reload
         # Expose so request handlers (e.g. /api/worklogs/generate) can
         # trigger a synchronous backfill before the daily LLM step.
         app.state.activity_summarizer = self._activity_summarizer

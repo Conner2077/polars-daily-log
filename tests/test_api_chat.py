@@ -42,9 +42,9 @@ class _FailingLLM:
 
 
 def _patch_engine(monkeypatch, engine):
-    async def _factory(_db):
+    async def _factory(_db, _name=None):
         return engine
-    monkeypatch.setattr(chat_module, "_get_llm_engine_from_settings", _factory)
+    monkeypatch.setattr(chat_module, "_get_engine_by_name", _factory)
 
 
 def _parse_sse(body: str) -> list:
@@ -585,7 +585,7 @@ async def test_extract_worklog_from_session(app_client, monkeypatch):
 
     canned = [
         {"issue_key": "PDL-42", "time_spent_hours": 1.5, "summary": "Built the chat streaming endpoint"},
-        {"issue_key": "OTHER",   "time_spent_hours": 0.5, "summary": "Misc housekeeping"},
+        {"issue_key": "PDL-99",  "time_spent_hours": 0.5, "summary": "Misc housekeeping"},
     ]
     extract_llm = _FakeLLM(response=json.dumps(canned, ensure_ascii=False))
     _patch_engine(monkeypatch, extract_llm)
@@ -793,7 +793,7 @@ async def test_push_to_jira_partial_failure_returns_both(app_client, monkeypatch
             "drafts": [
                 {"issue_key": "PDL-GOOD", "time_spent_hours": 1.0, "summary": "ok"},
                 {"issue_key": "PDL-BAD",  "time_spent_hours": 2.0, "summary": "bad"},
-                {"issue_key": "OTHER",    "time_spent_hours": 0.5, "summary": "skipped"},
+                {"issue_key": "ALL",      "time_spent_hours": 0.5, "summary": "skipped"},
                 {"issue_key": "PDL-ZERO", "time_spent_hours": 0,   "summary": "skipped hours"},
             ],
         },
