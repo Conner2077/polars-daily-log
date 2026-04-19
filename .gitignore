@@ -27,3 +27,4 @@ collector.yaml
 .vscode/
 # pytest
 .pytest_cache/
+.claude/
