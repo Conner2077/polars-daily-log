@@ -749,6 +749,7 @@
             <el-select v-model="outputForm.publisher_name" style="width: 100%" clearable placeholder="仅存档（不推送）">
               <el-option label="Jira" value="jira" />
               <el-option label="Webhook（企微/飞书/Slack）" value="webhook" />
+              <el-option label="CoDaily（日报广场）" value="codaily" />
             </el-select>
           </el-form-item>
           <el-form-item v-if="outputForm.publisher_name === 'webhook'" label="Webhook URL">
@@ -761,6 +762,15 @@
               <el-option label="Slack" value="slack" />
               <el-option label="通用 JSON" value="generic" />
             </el-select>
+          </el-form-item>
+          <el-form-item v-if="outputForm.publisher_name === 'codaily'" label="CoDaily URL">
+            <el-input v-model="outputForm.codaily_url" placeholder="https://codaily.fanruan.com" />
+          </el-form-item>
+          <el-form-item v-if="outputForm.publisher_name === 'codaily'" label="PDL Token">
+            <el-input v-model="outputForm.codaily_token" type="password" show-password placeholder="CoDaily Settings → 生成 PDL Token" />
+          </el-form-item>
+          <el-form-item v-if="outputForm.publisher_name === 'codaily'" label="Scope 标签">
+            <el-input v-model="outputForm.codaily_scope" placeholder="day" />
           </el-form-item>
           <el-form-item v-if="outputForm.publisher_name" label="推送方式">
             <el-select v-model="outputForm.auto_publish" style="width: 100%">
@@ -1080,7 +1090,9 @@ const outputEditId = ref(null)
 const outputScopeName = ref('')
 const outputForm = ref({
   display_name: '', output_mode: 'single', issue_source: 'jira',
-  llm_engine_name: '', publisher_name: '', webhook_url: '', webhook_format: 'wecom', auto_publish: false,
+  llm_engine_name: '', publisher_name: '', webhook_url: '', webhook_format: 'wecom',
+  codaily_url: '', codaily_token: '', codaily_scope: 'day',
+  auto_publish: false,
   prompt_source: 'summarize', prompt_template: '',
 })
 
@@ -1089,7 +1101,7 @@ function scopeTypeLabel(t) {
 }
 
 function publisherDisplayName(name) {
-  return { jira: 'Jira', webhook: 'Webhook' }[name] || name
+  return { jira: 'Jira', webhook: 'Webhook', codaily: 'CoDaily' }[name] || name
 }
 
 function formatScheduleRule(raw) {
@@ -1196,7 +1208,9 @@ async function openAddOutput(scopeName) {
   outputScopeName.value = scopeName
   outputForm.value = {
     display_name: '', output_mode: 'single', issue_source: 'jira',
-    publisher_name: '', webhook_url: '', webhook_format: 'wecom', auto_publish: false,
+    publisher_name: '', webhook_url: '', webhook_format: 'wecom',
+    codaily_url: '', codaily_token: '', codaily_scope: 'day',
+    auto_publish: false,
     prompt_source: 'summarize', prompt_template: '',
   }
   outputDialogVisible.value = true
@@ -1229,8 +1243,11 @@ async function editOutput(row, scope) {
     issue_source: row.issue_source || 'jira',
     llm_engine_name: row.llm_engine_name || '',
     publisher_name: row.publisher_name || '',
-    webhook_url: pubCfg.url || '',
+    webhook_url: row.publisher_name === 'webhook' ? (pubCfg.url || '') : '',
     webhook_format: pubCfg.format || 'wecom',
+    codaily_url: row.publisher_name === 'codaily' ? (pubCfg.url || '') : '',
+    codaily_token: row.publisher_name === 'codaily' ? (pubCfg.token || '') : '',
+    codaily_scope: row.publisher_name === 'codaily' ? (pubCfg.scope || 'day') : 'day',
     auto_publish: !!row.auto_publish,
     prompt_source: promptSource,
     prompt_template: row.prompt_template || '',
@@ -1240,9 +1257,12 @@ async function editOutput(row, scope) {
 
 async function saveOutput() {
   const f = outputForm.value
-  const publisherConfig = f.publisher_name === 'webhook'
-    ? JSON.stringify({ url: f.webhook_url, format: f.webhook_format })
-    : '{}'
+  let publisherConfig = '{}'
+  if (f.publisher_name === 'webhook') {
+    publisherConfig = JSON.stringify({ url: f.webhook_url, format: f.webhook_format })
+  } else if (f.publisher_name === 'codaily') {
+    publisherConfig = JSON.stringify({ url: f.codaily_url, token: f.codaily_token, scope: f.codaily_scope || 'day' })
+  }
   try {
     if (outputEditMode.value) {
       await api.updateScopeOutput(outputEditId.value, {

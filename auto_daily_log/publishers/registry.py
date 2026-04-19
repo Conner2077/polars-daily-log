@@ -75,9 +75,15 @@ async def _build_webhook(db: Database, config: dict) -> WorklogPublisher:
     return WebhookPublisher(config)
 
 
+async def _build_codaily(db: Database, config: dict) -> WorklogPublisher:
+    from .codaily import CoDailyPublisher
+    return CoDailyPublisher(config)
+
+
 # ── Factory map — add new publishers here ──────────────────────────────
 # Each factory receives (db, publisher_config_dict) and returns a publisher.
 _FACTORIES: dict = {
     "jira": _build_jira,
     "webhook": _build_webhook,
+    "codaily": _build_codaily,
 }
