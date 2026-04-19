@@ -935,14 +935,23 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { onBeforeRouteLeave } from 'vue-router'
+import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, Delete } from '@element-plus/icons-vue'
 import api from '../api'
 
-// Support ?tab= query param so other pages can deep-link to a tab
-const _urlTab = new URLSearchParams(window.location.search).get('tab')
-const activeTab = ref(_urlTab || 'profile')
+// Support ?tab= query param so other pages can deep-link to a tab.
+// Use useRoute() so navigating /settings?tab=X while already on /settings
+// updates activeTab (setup() only runs once, so reading window.location
+// once would miss subsequent deep-links).
+const route = useRoute()
+const activeTab = ref(route.query.tab || 'profile')
+watch(
+  () => route.query.tab,
+  (t) => {
+    if (t && typeof t === 'string') activeTab.value = t
+  }
+)
 const tabs = [
   { name: 'profile', label: '个人资料' },
   { name: 'monitor', label: '活动采集' },

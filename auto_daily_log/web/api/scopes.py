@@ -76,12 +76,9 @@ class OutputUpdate(BaseModel):
 async def list_scopes(request: Request):
     db = request.app.state.db
     scopes = await db.fetch_all(
-        "SELECT * FROM summary_types ORDER BY is_builtin DESC, "
-        "CASE WHEN scope_rule LIKE '%day%' THEN 1 "
-        "WHEN scope_rule LIKE '%week%' THEN 2 "
-        "WHEN scope_rule LIKE '%month%' THEN 3 "
-        "WHEN scope_rule LIKE '%quarter%' THEN 4 "
-        "ELSE 5 END, name"
+        "SELECT * FROM time_scopes ORDER BY is_builtin DESC, "
+        "CASE scope_type WHEN 'day' THEN 1 WHEN 'week' THEN 2 "
+        "WHEN 'month' THEN 3 WHEN 'quarter' THEN 4 ELSE 5 END, name"
     )
     result = []
     for s in scopes:
@@ -91,10 +88,6 @@ async def list_scopes(request: Request):
         )
         row = dict(s)
         row["outputs"] = [dict(o) for o in outputs]
-        try:
-            row["scope_type"] = json.loads(row.get("scope_rule") or "{}").get("type", "day")
-        except (json.JSONDecodeError, TypeError):
-            row["scope_type"] = "day"
         result.append(row)
     return result
 
@@ -105,14 +98,14 @@ async def create_scope(body: ScopeCreate, request: Request):
     if body.scope_type not in VALID_SCOPE_TYPES:
         raise HTTPException(400, f"scope_type 必须是 {VALID_SCOPE_TYPES} 之一")
     existing = await db.fetch_one(
-        "SELECT name FROM summary_types WHERE name = ?", (body.name,)
+        "SELECT name FROM time_scopes WHERE name = ?", (body.name,)
     )
     if existing:
         raise HTTPException(409, f"总结周期 '{body.name}' 已存在")
     await db.execute(
-        "INSERT INTO summary_types (name, display_name, scope_rule, schedule_rule, enabled) "
+        "INSERT INTO time_scopes (name, display_name, scope_type, schedule_rule, enabled) "
         "VALUES (?, ?, ?, ?, ?)",
-        (body.name, body.display_name, json.dumps({"type": body.scope_type}),
+        (body.name, body.display_name, body.scope_type,
          body.schedule_rule, 1 if body.enabled else 0),
     )
     await _reload_scheduler(request)
@@ -122,7 +115,7 @@ async def create_scope(body: ScopeCreate, request: Request):
 @router.put("/scopes/{name}")
 async def update_scope(name: str, body: ScopeUpdate, request: Request):
     db = request.app.state.db
-    existing = await db.fetch_one("SELECT * FROM summary_types WHERE name = ?", (name,))
+    existing = await db.fetch_one("SELECT * FROM time_scopes WHERE name = ?", (name,))
     if not existing:
         raise HTTPException(404, f"总结周期 '{name}' 不存在")
     updates: list[str] = []
@@ -133,8 +126,8 @@ async def update_scope(name: str, body: ScopeUpdate, request: Request):
     if body.scope_type is not None:
         if body.scope_type not in VALID_SCOPE_TYPES:
             raise HTTPException(400, f"scope_type 必须是 {VALID_SCOPE_TYPES} 之一")
-        updates.append("scope_rule = ?")
-        params.append(json.dumps({"type": body.scope_type}))
+        updates.append("scope_type = ?")
+        params.append(body.scope_type)
     if body.schedule_rule is not None:
         updates.append("schedule_rule = ?")
         params.append(body.schedule_rule or None)
@@ -145,7 +138,7 @@ async def update_scope(name: str, body: ScopeUpdate, request: Request):
         raise HTTPException(400, "没有要更新的字段")
     params.append(name)
     await db.execute(
-        f"UPDATE summary_types SET {', '.join(updates)} WHERE name = ?",
+        f"UPDATE time_scopes SET {', '.join(updates)} WHERE name = ?",
         tuple(params),
     )
     await _reload_scheduler(request)
@@ -155,13 +148,13 @@ async def update_scope(name: str, body: ScopeUpdate, request: Request):
 @router.delete("/scopes/{name}")
 async def delete_scope(name: str, request: Request):
     db = request.app.state.db
-    existing = await db.fetch_one("SELECT * FROM summary_types WHERE name = ?", (name,))
+    existing = await db.fetch_one("SELECT * FROM time_scopes WHERE name = ?", (name,))
     if not existing:
         raise HTTPException(404, f"总结周期 '{name}' 不存在")
     if existing["is_builtin"]:
         raise HTTPException(403, f"内置周期 '{name}' 不能删除")
     await db.execute("DELETE FROM scope_outputs WHERE scope_name = ?", (name,))
-    await db.execute("DELETE FROM summary_types WHERE name = ?", (name,))
+    await db.execute("DELETE FROM time_scopes WHERE name = ?", (name,))
     await _reload_scheduler(request)
     return {"name": name, "status": "deleted"}
 
@@ -172,7 +165,7 @@ async def delete_scope(name: str, request: Request):
 @router.get("/scopes/{scope_name}/outputs")
 async def list_outputs(scope_name: str, request: Request):
     db = request.app.state.db
-    scope = await db.fetch_one("SELECT name FROM summary_types WHERE name = ?", (scope_name,))
+    scope = await db.fetch_one("SELECT name FROM time_scopes WHERE name = ?", (scope_name,))
     if not scope:
         raise HTTPException(404, f"总结周期 '{scope_name}' 不存在")
     return await db.fetch_all(
@@ -184,7 +177,7 @@ async def list_outputs(scope_name: str, request: Request):
 @router.post("/scopes/{scope_name}/outputs", status_code=201)
 async def create_output(scope_name: str, body: OutputCreate, request: Request):
     db = request.app.state.db
-    scope = await db.fetch_one("SELECT name FROM summary_types WHERE name = ?", (scope_name,))
+    scope = await db.fetch_one("SELECT name FROM time_scopes WHERE name = ?", (scope_name,))
     if not scope:
         raise HTTPException(404, f"总结周期 '{scope_name}' 不存在")
     if body.output_mode not in VALID_OUTPUT_MODES:

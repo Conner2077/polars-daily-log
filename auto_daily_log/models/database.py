@@ -363,7 +363,7 @@ class Database:
         ts_row = await ts_count.fetchone()
         if ts_row["n"] == 0:
             st_rows = await self.fetch_all("SELECT * FROM summary_types")
-            _SCOPE_TYPE_MAP = {"day": "day", "week": "week", "month": "month"}
+            _SCOPE_TYPE_MAP = {"day": "day", "week": "week", "month": "month", "quarter": "quarter"}
             for st in st_rows:
                 try:
                     scope_rule = _json.loads(st["scope_rule"]) if st["scope_rule"] else {}
@@ -387,6 +387,14 @@ class Database:
                     (st["name"], st["display_name"], scope_type, sched,
                      st.get("is_builtin", 0), st.get("enabled", 1)),
                 )
+
+        # Ensure all builtin scopes exist (covers fresh installs + upgrades)
+        for name, disp, stype in [("daily", "每日日志", "day"), ("weekly", "周报", "week"),
+                                   ("monthly", "月报", "month"), ("quarterly", "季报", "quarter")]:
+            await self._conn.execute(
+                "INSERT OR IGNORE INTO time_scopes (name, display_name, scope_type, is_builtin, enabled) "
+                "VALUES (?, ?, ?, 1, 1)", (name, disp, stype),
+            )
 
         # 2. Seed default scope_outputs (idempotent)
         so_count = await self._conn.execute("SELECT COUNT(*) AS n FROM scope_outputs")
@@ -436,6 +444,35 @@ class Database:
                 "prompt_template, publisher_name, publisher_config, auto_publish) "
                 "VALUES ('quarterly', '季报', 'single', NULL, NULL, NULL, '{}', 0)"
             )
+
+        # 4. scope_outputs: add llm_engine_name column (must run before early return)
+        so_cols = await self.fetch_all("PRAGMA table_info(scope_outputs)")
+        so_col_names = {c["name"] for c in so_cols}
+        if "llm_engine_name" not in so_col_names:
+            await self._conn.execute(
+                "ALTER TABLE scope_outputs ADD COLUMN llm_engine_name TEXT"
+            )
+
+        # 5. Seed llm_engines from settings (idempotent, must run before early return)
+        le_count = await self._conn.execute("SELECT COUNT(*) AS n FROM llm_engines")
+        le_row = await le_count.fetchone()
+        if le_row["n"] == 0:
+            llm_settings = {}
+            for key in ("llm_engine", "llm_api_key", "llm_model", "llm_base_url"):
+                row = await self.fetch_one("SELECT value FROM settings WHERE key = ?", (key,))
+                llm_settings[key] = (row["value"] if row and row.get("value") else "")
+            api_key = llm_settings.get("llm_api_key", "")
+            if api_key:
+                protocol = llm_settings.get("llm_engine") or "openai_compat"
+                model = llm_settings.get("llm_model") or ""
+                base_url = llm_settings.get("llm_base_url") or ""
+                display = model or protocol
+                await self._conn.execute(
+                    "INSERT OR IGNORE INTO llm_engines "
+                    "(name, display_name, protocol, api_key, model, base_url, is_default, enabled) "
+                    "VALUES ('default', ?, ?, ?, ?, ?, 1, 1)",
+                    (display, protocol, api_key, model, base_url),
+                )
 
         # 3. Migrate worklog_drafts → summaries (idempotent: only if summaries empty)
         sum_count = await self._conn.execute("SELECT COUNT(*) AS n FROM summaries")
@@ -516,37 +553,6 @@ class Database:
                          draft.get("period_start"), draft.get("period_end"),
                          draft["summary"], draft.get("created_at")),
                     )
-
-        # 4. scope_outputs: add llm_engine_name column
-        so_cols = await self.fetch_all("PRAGMA table_info(scope_outputs)")
-        so_col_names = {c["name"] for c in so_cols}
-        if "llm_engine_name" not in so_col_names:
-            await self._conn.execute(
-                "ALTER TABLE scope_outputs ADD COLUMN llm_engine_name TEXT"
-            )
-
-        # 5. Seed llm_engines from settings (idempotent)
-        le_count = await self._conn.execute("SELECT COUNT(*) AS n FROM llm_engines")
-        le_row = await le_count.fetchone()
-        if le_row["n"] == 0:
-            # Migrate current LLM settings into a "default" engine
-            llm_settings = {}
-            for key in ("llm_engine", "llm_api_key", "llm_model", "llm_base_url"):
-                row = await self.fetch_one("SELECT value FROM settings WHERE key = ?", (key,))
-                llm_settings[key] = (row["value"] if row and row.get("value") else "")
-            api_key = llm_settings.get("llm_api_key", "")
-            if api_key:
-                protocol = llm_settings.get("llm_engine") or "openai_compat"
-                model = llm_settings.get("llm_model") or ""
-                base_url = llm_settings.get("llm_base_url") or ""
-                # Derive a display name from model or protocol
-                display = model or protocol
-                await self._conn.execute(
-                    "INSERT OR IGNORE INTO llm_engines "
-                    "(name, display_name, protocol, api_key, model, base_url, is_default, enabled) "
-                    "VALUES ('default', ?, ?, ?, ?, ?, 1, 1)",
-                    (display, protocol, api_key, model, base_url),
-                )
 
     async def close(self) -> None:
         if self._conn:

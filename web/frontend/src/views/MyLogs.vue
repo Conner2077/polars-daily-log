@@ -7,16 +7,27 @@
         <div class="page-subtitle">{{ headerSubtitle }}</div>
       </div>
       <div class="page-header-right">
-        <el-button
+        <el-tooltip
           v-for="scope in enabledScopes"
           :key="scope.name"
-          round
-          :disabled="generating"
-          @click="generate(scope.name)"
-        >{{ scope.display_name }}</el-button>
-        <router-link to="/settings?tab=scopes" class="add-type-link" title="管理总结周期">
-          <el-button round size="small">+</el-button>
-        </router-link>
+          :content="`生成${scope.display_name}`"
+          placement="bottom"
+          :show-after="300"
+        >
+          <el-button
+            round
+            :disabled="generating"
+            @click="generate(scope.name)"
+          >
+            <el-icon class="gen-icon"><magic-stick /></el-icon>
+            {{ scope.display_name }}
+          </el-button>
+        </el-tooltip>
+        <el-tooltip content="管理总结周期" placement="bottom" :show-after="300">
+          <router-link to="/settings?tab=scopes" class="add-type-link">
+            <el-button round size="small">+</el-button>
+          </router-link>
+        </el-tooltip>
       </div>
     </div>
 
@@ -571,6 +582,8 @@ onMounted(() => { loadScopes(); loadJiraContext(); loadSummaries() })
 .page-title { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; color: var(--ink); margin: 0; line-height: 1.2; }
 .page-subtitle { font-size: 13px; color: var(--ink-muted); }
 .page-header-right { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.page-header-right :deep(.gen-icon) { font-size: 13px; margin-right: 4px; color: var(--ink-muted); }
+.page-header-right :deep(.el-button:not(.is-disabled):hover .gen-icon) { color: var(--ink); }
 
 /* ───── Toolbar ───── */
 .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
