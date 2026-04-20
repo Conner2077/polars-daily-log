@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.7.1] — 2026-04-20
+
+Hotfix：修 Linux 用户的"定时任务不跑"回归。
+
+### Fixed
+- **`time_scopes.daily.schedule_rule` 被意外 NULL 导致 scheduler 零 job 注册**：旧版迁移用"整表为空才迁"的条件，用户通过中间版本升级时可能留下 `time_scopes.daily` 行但 `schedule_rule` 为 NULL，从此再也不触发迁移。scheduler 的 `WHERE schedule_rule IS NOT NULL` 过滤掉这行 → 定时任务全部不跑。
+  - 迁移改成**per-row 幂等**：每行单独检查，缺失就插入，存在但 `schedule_rule` 为 NULL 而 `summary_types` 有值就回填（保留用户自定义的时间）。
+  - builtin-ensure 循环给 `daily` 带默认 `{"time":"18:00"}`。
+  - 启动兜底：`daily` 仍为 NULL 时最终 UPDATE 一次默认值。
+- 涉及测试：`tests/test_migration_pipeline.py` 新增 3 个回归 case 覆盖漂移修复、硬编码兜底、manual 类型保持 NULL。
+
+### 升级注意
+- 纯数据库层修复，无 API / UI 改动。
+- 升级后首次启动会自动检测并修复 `time_scopes.daily.schedule_rule`（日志无输出，静默修复）。
+- 如果你此前手动改过 `daily` 的触发时间，修复会优先从 `summary_types` 回填，不会被 `18:00` 默认值覆盖。
+
+---
+
 ## [0.7.0] — 2026-04-20
 
 CoDaily 日报广场接入、MyLog 动作语义化、多实例测试工具。
