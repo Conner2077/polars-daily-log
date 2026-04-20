@@ -70,6 +70,84 @@ def _make_fake_pip(tmp_path: Path, *, exit_code: int = 0) -> Path:
     return fake
 
 
+def test_installer_command_uses_pip_when_available(monkeypatch):
+    """Default path: `python -m pip` works → use it directly."""
+    monkeypatch.delenv(runner.PIP_CMD_ENV, raising=False)
+    monkeypatch.setattr(runner, "_probe", lambda cmd: 0 if "pip" in cmd else 1)
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    cmd = runner._installer_command("x.whl")
+    assert cmd[0] == sys.executable
+    assert cmd[1:4] == ["-m", "pip", "install"]
+    assert cmd[-1] == "x.whl"
+
+
+def test_installer_command_bootstraps_via_ensurepip(monkeypatch):
+    """uv venvs that exclude pip but include ensurepip should self-repair:
+    first pip probe fails → ensurepip succeeds → second pip probe passes."""
+    monkeypatch.delenv(runner.PIP_CMD_ENV, raising=False)
+    calls = []
+
+    def fake_probe(cmd):
+        calls.append(cmd)
+        is_ensurepip = "ensurepip" in cmd
+        if is_ensurepip:
+            return 0  # ensurepip succeeds
+        # pip probes: first fails, subsequent (after ensurepip) succeeds
+        prior_pip_probes = sum(1 for c in calls[:-1] if "pip" in c and "ensurepip" not in c)
+        return 1 if prior_pip_probes == 0 else 0
+
+    monkeypatch.setattr(runner, "_probe", fake_probe)
+    monkeypatch.setattr("shutil.which", lambda name: None)
+
+    cmd = runner._installer_command("x.whl")
+    assert cmd[0] == sys.executable
+    assert cmd[1:4] == ["-m", "pip", "install"]
+    # ensurepip must have been attempted in the probe chain
+    assert any("ensurepip" in c for c in calls)
+
+
+def test_installer_command_falls_back_to_uv_when_pip_unavailable(monkeypatch, tmp_path):
+    """Pure uv venv: neither pip nor ensurepip works → use `uv pip install`."""
+    monkeypatch.delenv(runner.PIP_CMD_ENV, raising=False)
+    monkeypatch.setattr(runner, "_probe", lambda cmd: 1)  # every probe fails
+
+    fake_uv = tmp_path / "uv"
+    fake_uv.write_text("#!/bin/sh\nexit 0\n")
+    fake_uv.chmod(0o755)
+    monkeypatch.setattr("shutil.which", lambda name: str(fake_uv) if name == "uv" else None)
+
+    cmd = runner._installer_command("x.whl")
+    assert cmd[0] == str(fake_uv)
+    assert cmd[1:3] == ["pip", "install"]
+    assert "--python" in cmd and sys.executable in cmd
+    assert cmd[-2:] == ["--upgrade", "x.whl"]
+
+
+def test_installer_command_raises_when_neither_pip_nor_uv(monkeypatch):
+    """No pip, no ensurepip, no uv → raise a clear error so upstream can log + rollback."""
+    monkeypatch.delenv(runner.PIP_CMD_ENV, raising=False)
+    monkeypatch.setattr(runner, "_probe", lambda cmd: 1)
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    with pytest.raises(RuntimeError, match="pip"):
+        runner._installer_command("x.whl")
+
+
+def test_run_pip_install_logs_and_returns_127_when_installer_unavailable(monkeypatch, tmp_path):
+    """If no installer can be found, run_pip_install returns 127 (command
+    not found) and writes a diagnostic to the log, so apply_update triggers
+    a clean rollback instead of crashing."""
+    monkeypatch.delenv(runner.PIP_CMD_ENV, raising=False)
+    monkeypatch.setattr(runner, "_probe", lambda cmd: 1)
+    monkeypatch.setattr("shutil.which", lambda name: None)
+
+    log = tmp_path / "u.log"
+    rc = runner.run_pip_install("x.whl", log_path=log)
+    assert rc == 127
+    assert log.exists()
+    content = log.read_text(encoding="utf-8")
+    assert "pip" in content  # diagnostic mentions pip
+
+
 def test_run_pip_install_returns_zero_on_success(tmp_path, monkeypatch):
     fake = _make_fake_pip(tmp_path, exit_code=0)
     monkeypatch.setenv(runner.PIP_CMD_ENV, f"{sys.executable} {fake}")

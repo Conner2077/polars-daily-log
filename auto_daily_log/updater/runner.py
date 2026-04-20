@@ -51,10 +51,59 @@ class RestartSpec:
 
 
 def _pip_argv() -> list[str]:
+    """Legacy helper kept for backward-compat; prefer _installer_command."""
     override = os.environ.get(PIP_CMD_ENV)
     if override:
         return override.split()
     return [sys.executable, "-m", "pip"]
+
+
+def _probe(cmd: list[str]) -> int:
+    """Run cmd silently; return exit code. 127 if binary missing."""
+    try:
+        proc = subprocess.run(cmd, capture_output=True, check=False)
+        return proc.returncode
+    except (OSError, FileNotFoundError):
+        return 127
+
+
+def _installer_command(target: str) -> list[str]:
+    """Build the command that installs/upgrades ``target`` into the current venv.
+
+    Probe chain — first hit wins:
+      1. ``python -m pip`` if pip is already importable
+      2. ``python -m ensurepip --upgrade`` to bootstrap pip (stdlib fallback)
+         then re-probe pip
+      3. ``uv pip install --python <python>`` if uv is on PATH
+
+    uv venvs (``uv venv``) ship without pip by default and also strip
+    ensurepip; step 3 catches those installs. Raises RuntimeError if
+    nothing works so apply_update can log a clear message + rollback.
+    """
+    override = os.environ.get(PIP_CMD_ENV)
+    if override:
+        return [*override.split(), "install", "--upgrade", target]
+
+    python = sys.executable
+
+    # 1. pip already there
+    if _probe([python, "-m", "pip", "--version"]) == 0:
+        return [python, "-m", "pip", "install", "--upgrade", target]
+
+    # 2. bootstrap pip via ensurepip (works for stdlib-based venvs)
+    if _probe([python, "-m", "ensurepip", "--upgrade"]) == 0:
+        if _probe([python, "-m", "pip", "--version"]) == 0:
+            return [python, "-m", "pip", "install", "--upgrade", target]
+
+    # 3. fall back to uv (covers `uv venv` installs that skipped ensurepip)
+    uv = shutil.which("uv")
+    if uv:
+        return [uv, "pip", "install", "--python", python, "--upgrade", target]
+
+    raise RuntimeError(
+        "Cannot install update: this venv has no pip and `uv` is not on PATH. "
+        f"Run `{python} -m ensurepip --upgrade` or `uv pip install pip` then retry."
+    )
 
 
 def kill_server(pid: int, *, timeout: float = 10.0) -> bool:
@@ -124,9 +173,19 @@ def spawn_detached(argv: list[str], log_path: Path, *, cwd: Optional[Path] = Non
 
 
 def run_pip_install(wheel_url: str, *, log_path: Path) -> int:
-    """Install/upgrade the package via the current interp's pip. Returns rc."""
-    cmd = [*_pip_argv(), "install", "--upgrade", wheel_url]
+    """Install/upgrade the package into the current venv. Returns rc.
+
+    Picks pip or uv automatically — see _installer_command. Returns 127
+    (shell "command not found") when no installer is available, which
+    apply_update treats as a pip failure and triggers rollback.
+    """
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        cmd = _installer_command(wheel_url)
+    except RuntimeError as exc:
+        with log_path.open("ab", buffering=0) as f:
+            f.write(f"\nupdater error: {exc}\n".encode())
+        return 127
     with log_path.open("ab", buffering=0) as f:
         f.write(f"\n$ {' '.join(cmd)}\n".encode())
         proc = subprocess.run(
