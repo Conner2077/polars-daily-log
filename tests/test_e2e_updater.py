@@ -123,7 +123,10 @@ def _make_fake_pip(tmp_path: Path) -> str:
 async def test_check_endpoint_serves_seeded_cache(env):
     client, _, _ = env
     _seed_check_cache("9.9.9", True, "https://example.com/x.whl")
-    r = await client.get("/api/updates/check")
+    # Cache fixture records current="0.4.0"; runtime __version__ must
+    # agree or drift-invalidation kicks in.
+    with patch("auto_daily_log.updater.version_check.__version__", "0.4.0"):
+        r = await client.get("/api/updates/check")
     body = r.json()
     assert body["latest"] == "9.9.9"
     assert body["available"] is True
@@ -138,6 +141,7 @@ async def test_full_install_lifecycle_via_real_subprocess(env):
     # Patch the in-API "current version" + the runner's so install is allowed
     # and the spawned subprocess inherits the override via env (PIP_CMD_ENV).
     with patch("auto_daily_log.web.api.updates.__version__", "0.4.0"), \
+         patch("auto_daily_log.updater.version_check.__version__", "0.4.0"), \
          patch("auto_daily_log.updater.runner.wait_for_health", return_value=True), \
          patch("auto_daily_log.updater.runner.spawn_detached", return_value=99999):
         # spawn_detached is the only thing we mock inside the *child* updater
@@ -194,7 +198,8 @@ async def test_full_install_lifecycle_via_real_subprocess(env):
 async def test_install_rejected_when_already_on_target(env):
     client, _, _ = env
     _seed_check_cache("0.4.0", False, "")
-    with patch("auto_daily_log.web.api.updates.__version__", "0.4.0"):
+    with patch("auto_daily_log.web.api.updates.__version__", "0.4.0"), \
+         patch("auto_daily_log.updater.version_check.__version__", "0.4.0"):
         r = await client.post("/api/updates/install", json={})
     assert r.status_code == 409
 

@@ -57,6 +57,14 @@ def _read_cache() -> Optional[UpdateCheck]:
         data = json.loads(path.read_text(encoding="utf-8"))
         if time.time() - data.get("checked_at", 0) > CACHE_TTL_SEC:
             return None
+        # Drift invalidation: if the app was upgraded externally
+        # (git pull + pip install, or rolled back via /rollback) the
+        # runtime __version__ no longer matches what the cache recorded.
+        # Pretend the cache is stale so we re-query GitHub with the
+        # current version — otherwise install_update would see the
+        # cache's latest == __version__ and 409 "already on X".
+        if data.get("current") != __version__:
+            return None
         return UpdateCheck(**data)
     except (json.JSONDecodeError, TypeError, KeyError):
         return None

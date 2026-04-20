@@ -83,7 +83,10 @@ def test_check_uses_cache_within_ttl(isolated_data_dir):
         "checked_at": time.time(),
     }
     update_check_path().write_text(json.dumps(cached))
-    with patch("auto_daily_log.updater.version_check.httpx.get") as net:
+    # Cache is only honored when cached current matches runtime __version__.
+    # Patch __version__ to the cached value so the TTL path is exercised.
+    with patch.object(version_check, "__version__", "0.4.0"), \
+         patch("auto_daily_log.updater.version_check.httpx.get") as net:
         result = version_check.check(force=False, current="0.4.0")
     assert net.call_count == 0
     assert result.notes == "from cache"
@@ -96,9 +99,61 @@ def test_check_ignores_stale_cache(isolated_data_dir):
         "checked_at": time.time() - version_check.CACHE_TTL_SEC - 60,
     }
     update_check_path().write_text(json.dumps(stale))
-    with _mock_httpx(_release_payload("0.6.0")):
+    with patch.object(version_check, "__version__", "0.4.0"), \
+         _mock_httpx(_release_payload("0.6.0")):
         result = version_check.check(force=False, current="0.4.0")
     assert result.latest == "0.6.0"
+
+
+def test_cache_invalidated_when_runtime_version_drifted(isolated_data_dir):
+    """Regression: user manually `git pull + pip install` upgrades from
+    0.7.0 → 0.7.1 while the cache still says current=0.7.0. Without this
+    check the UI keeps offering "upgrade to 0.7.1", the install endpoint
+    then 409s because target == __version__. The cache must be treated as
+    stale when runtime __version__ drifts from what was recorded."""
+    stale_but_recent = {
+        "current": "0.7.0",          # recorded when we were on 0.7.0
+        "latest": "0.7.1",
+        "available": True,
+        "wheel_url": "https://example.com/auto_daily_log-0.7.1-py3-none-any.whl",
+        "release_url": "",
+        "notes": "should be ignored",
+        "checked_at": time.time(),    # within 24h TTL — old gate would return cache
+    }
+    update_check_path().write_text(json.dumps(stale_but_recent))
+
+    # Runtime __version__ has moved on; check() must re-query GitHub.
+    with patch.object(version_check, "__version__", "0.7.1"), \
+         _mock_httpx(_release_payload("0.7.1")):
+        result = version_check.check(force=False)
+
+    assert result.current == "0.7.1"
+    assert result.latest == "0.7.1"
+    assert result.available is False  # now actually up to date
+    assert result.notes != "should be ignored"  # stale cache was dropped
+
+
+def test_cache_honored_when_runtime_version_matches(isolated_data_dir):
+    """Sanity: the TTL-window cache should still be used when the runtime
+    version matches the cached `current`. We don't want to tear down the
+    cache on every call — only when drift is detected."""
+    cached = {
+        "current": "0.7.1",
+        "latest": "0.7.1",
+        "available": False,
+        "wheel_url": "",
+        "release_url": "",
+        "notes": "fresh",
+        "checked_at": time.time(),
+    }
+    update_check_path().write_text(json.dumps(cached))
+
+    with patch.object(version_check, "__version__", "0.7.1"), \
+         patch("auto_daily_log.updater.version_check.httpx.get") as net:
+        result = version_check.check(force=False)
+
+    assert net.call_count == 0
+    assert result.notes == "fresh"
 
 
 def test_check_swallows_network_error_and_returns_no_update():

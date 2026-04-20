@@ -62,7 +62,10 @@ def _seed_check_cache(latest: str, available: bool, wheel: str = "") -> None:
 @pytest.mark.asyncio
 async def test_check_returns_cached_payload(env):
     _seed_check_cache("9.9.9", True)
-    r = await env.get("/api/updates/check")
+    # Cache fixture records current="0.4.0"; runtime __version__ must
+    # agree or the new drift-invalidation kicks in.
+    with patch("auto_daily_log.updater.version_check.__version__", "0.4.0"):
+        r = await env.get("/api/updates/check")
     assert r.status_code == 200
     body = r.json()
     assert body["latest"] == "9.9.9"
@@ -94,7 +97,8 @@ async def test_check_force_bypasses_cache(env):
 @pytest.mark.asyncio
 async def test_install_returns_409_when_already_on_latest(env):
     _seed_check_cache("0.4.0", False)
-    with patch("auto_daily_log.web.api.updates.__version__", "0.4.0"):
+    with patch("auto_daily_log.web.api.updates.__version__", "0.4.0"), \
+         patch("auto_daily_log.updater.version_check.__version__", "0.4.0"):
         r = await env.post("/api/updates/install", json={})
     assert r.status_code == 409
 
@@ -103,7 +107,8 @@ async def test_install_returns_409_when_already_on_latest(env):
 async def test_install_spawns_updater_and_returns_202(env):
     _seed_check_cache("9.9.9", True, "https://example.com/x.whl")
     with patch("auto_daily_log.web.api.updates._spawn_updater", return_value=4242) as spawned, \
-         patch("auto_daily_log.web.api.updates.__version__", "0.4.0"):
+         patch("auto_daily_log.web.api.updates.__version__", "0.4.0"), \
+         patch("auto_daily_log.updater.version_check.__version__", "0.4.0"):
         r = await env.post("/api/updates/install", json={})
     assert r.status_code == 202
     body = r.json()
@@ -124,7 +129,8 @@ async def test_install_rejects_when_no_wheel_url(env):
         "wheel_url": "", "release_url": "", "notes": "",
         "checked_at": time.time(),
     }))
-    with patch("auto_daily_log.web.api.updates.__version__", "0.4.0"):
+    with patch("auto_daily_log.web.api.updates.__version__", "0.4.0"), \
+         patch("auto_daily_log.updater.version_check.__version__", "0.4.0"):
         r = await env.post("/api/updates/install", json={})
     assert r.status_code == 400
 
