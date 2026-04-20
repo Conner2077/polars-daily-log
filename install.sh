@@ -315,7 +315,8 @@ setup_venv() {
 detect_install_mode() {
     if compgen -G "$INSTALL_DIR/wheels/auto_daily_log-*.whl" > /dev/null; then
         INSTALL_MODE="release"
-        WHEEL_PATH="$(ls "$INSTALL_DIR/wheels/"auto_daily_log-*.whl | head -1)"
+        # Pick the newest wheel by version (ls -v sorts by version number)
+        WHEEL_PATH="$(ls -v "$INSTALL_DIR/wheels/"auto_daily_log-*.whl | tail -1)"
     elif [ -d "$INSTALL_DIR/auto_daily_log" ] && [ -f "$INSTALL_DIR/pyproject.toml" ]; then
         INSTALL_MODE="dev"
     else
@@ -337,7 +338,7 @@ install_python_deps() {
     pip install --upgrade pip -q -i "$PIP_MIRROR" --trusted-host "$PIP_HOST" 2>/dev/null
     if [ "$INSTALL_MODE" = "release" ]; then
         info "Installing from bundled wheel: $(basename "$WHEEL_PATH")"
-        pip install "$WHEEL_PATH[$PLATFORM]" -q -i "$PIP_MIRROR" --trusted-host "$PIP_HOST" 2>&1 | tail -3
+        pip install --force-reinstall "$WHEEL_PATH[$PLATFORM]" -q -i "$PIP_MIRROR" --trusted-host "$PIP_HOST" 2>&1 | tail -3
         ok "Installed auto-daily-log[$PLATFORM] (release mode)"
     else
         info "Installing editable source + $PLATFORM dependencies..."
