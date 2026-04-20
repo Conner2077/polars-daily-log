@@ -26,6 +26,17 @@ PHASES = (
     "failed",
 )
 
+# Terminal phases — state is frozen here; the updater will never write
+# again until a new upgrade starts.
+_TERMINAL_PHASES = frozenset({"completed", "failed"})
+
+# How long a terminal status lingers before read_status() treats it as
+# stale and returns a fresh idle. 1 hour: long enough for the user to
+# see the toast/banner after reloading post-upgrade; short enough that
+# a failed run yesterday doesn't make every subsequent page load claim
+# "升级失败".
+_TERMINAL_TTL_SEC = 3600
+
 
 @dataclass
 class UpdateStatus:
@@ -49,9 +60,22 @@ def read_status() -> UpdateStatus:
     if not path.exists():
         return UpdateStatus()
     try:
-        return UpdateStatus(**json.loads(path.read_text(encoding="utf-8")))
+        status = UpdateStatus(**json.loads(path.read_text(encoding="utf-8")))
     except (json.JSONDecodeError, TypeError):
         return UpdateStatus(phase="failed", error="status file corrupted")
+    # Stale-terminal cleanup: without this, a persisted failed/completed
+    # record makes the UI show "升级失败" or "升级完成" forever on every
+    # subsequent page load. Drop the file and return fresh idle once TTL
+    # elapses. In-progress states are kept untouched — a stuck upgrade
+    # is its own signal the user should see.
+    if status.phase in _TERMINAL_PHASES and status.updated_at:
+        if time.time() - status.updated_at > _TERMINAL_TTL_SEC:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            return UpdateStatus()
+    return status
 
 
 def write_status(status: UpdateStatus) -> None:

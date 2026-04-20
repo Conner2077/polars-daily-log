@@ -46,6 +46,83 @@ def test_advance_rejects_unknown_phase():
         state.advance(phase="bogus", progress_pct=1, message="x")
 
 
+def test_read_status_clears_stale_failed_terminal(isolated_data_dir):
+    """A failed status older than the terminal TTL must NOT pollute the UI
+    on subsequent page loads — read_status drops it and returns idle.
+
+    Without this, users see "升级失败" forever after one failed upgrade.
+    """
+    stale = state.UpdateStatus(
+        phase="failed",
+        error="pip exited with code 2",
+        message="pip exited with code 2",
+        updated_at=time.time() - state._TERMINAL_TTL_SEC - 60,  # 1 min past TTL
+    )
+    # Bypass write_status (which bumps updated_at) so the fake timestamp sticks
+    from auto_daily_log.updater.paths import update_status_path as _path
+    _path().parent.mkdir(parents=True, exist_ok=True)
+    _path().write_text(json.dumps(stale.to_dict()), encoding="utf-8")
+
+    got = state.read_status()
+    assert got.phase == "idle"
+    assert got.error == ""
+    # File should be cleaned up so future polls are cheap
+    assert not _path().exists()
+
+
+def test_read_status_clears_stale_completed_terminal(isolated_data_dir):
+    """Same logic for completed — a week-old success record shouldn't still
+    trigger the completed toast on a fresh session."""
+    stale = state.UpdateStatus(
+        phase="completed",
+        target_version="0.7.1",
+        message="now running 0.7.1",
+        updated_at=time.time() - 7 * 86_400,
+    )
+    from auto_daily_log.updater.paths import update_status_path as _path
+    _path().parent.mkdir(parents=True, exist_ok=True)
+    _path().write_text(json.dumps(stale.to_dict()), encoding="utf-8")
+
+    got = state.read_status()
+    assert got.phase == "idle"
+
+
+def test_read_status_keeps_fresh_terminal(isolated_data_dir):
+    """Just-failed status within TTL must be returned as-is so the UI can
+    actually tell the user the upgrade failed."""
+    fresh = state.UpdateStatus(
+        phase="failed",
+        error="pip exited with code 7",
+        message="pip exited with code 7",
+        updated_at=time.time() - 30,  # 30 seconds ago
+    )
+    from auto_daily_log.updater.paths import update_status_path as _path
+    _path().parent.mkdir(parents=True, exist_ok=True)
+    _path().write_text(json.dumps(fresh.to_dict()), encoding="utf-8")
+
+    got = state.read_status()
+    assert got.phase == "failed"
+    assert got.error == "pip exited with code 7"
+
+
+def test_read_status_keeps_in_progress_regardless_of_age(isolated_data_dir):
+    """In-progress states (installing, backing_up, etc) are NOT auto-cleared
+    — a stuck-mid-upgrade record is its own signal the user needs to see
+    rather than silently hiding."""
+    stuck = state.UpdateStatus(
+        phase="installing",
+        progress_pct=55,
+        updated_at=time.time() - state._TERMINAL_TTL_SEC * 2,
+    )
+    from auto_daily_log.updater.paths import update_status_path as _path
+    _path().parent.mkdir(parents=True, exist_ok=True)
+    _path().write_text(json.dumps(stuck.to_dict()), encoding="utf-8")
+
+    got = state.read_status()
+    assert got.phase == "installing"
+    assert got.progress_pct == 55
+
+
 def test_status_file_is_atomic_on_concurrent_read(isolated_data_dir):
     state.write_status(state.UpdateStatus(phase="installing", progress_pct=55))
     raw = update_status_path().read_text(encoding="utf-8")
