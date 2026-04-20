@@ -202,6 +202,47 @@ async def list_activity_dates(
     return rows
 
 
+@router.post("/activities/retry-failed")
+async def retry_failed_activities(
+    request: Request,
+    target_date: str = Query(default=None),
+):
+    """Re-queue activities whose LLM summarization previously failed.
+
+    Resets ``llm_summary='(failed)'`` back to NULL so ActivitySummarizer's
+    5-second polling loop picks them up on the next tick. Without this
+    endpoint, failed rows sit out the 24h cooldown in
+    ``ActivitySummarizer.FAIL_COOLDOWN_HOURS`` — which protects against
+    hot-looping on genuinely unacceptable content, but is the wrong call
+    when the failure was transient (bad API key, upstream outage).
+
+    ``target_date`` optional: scoped per-date (matches Activities page
+    view). Omit to reset every failed row across all dates.
+    """
+    db = request.app.state.db
+    if target_date:
+        count_row = await db.fetch_one(
+            "SELECT COUNT(*) AS cnt FROM activities "
+            "WHERE llm_summary = '(failed)' AND deleted_at IS NULL AND date(timestamp) = ?",
+            (target_date,),
+        )
+        await db.execute(
+            "UPDATE activities SET llm_summary = NULL, llm_summary_at = NULL "
+            "WHERE llm_summary = '(failed)' AND deleted_at IS NULL AND date(timestamp) = ?",
+            (target_date,),
+        )
+    else:
+        count_row = await db.fetch_one(
+            "SELECT COUNT(*) AS cnt FROM activities "
+            "WHERE llm_summary = '(failed)' AND deleted_at IS NULL"
+        )
+        await db.execute(
+            "UPDATE activities SET llm_summary = NULL, llm_summary_at = NULL "
+            "WHERE llm_summary = '(failed)' AND deleted_at IS NULL"
+        )
+    return {"status": "requeued", "count": count_row["cnt"] if count_row else 0}
+
+
 @router.delete("/activities/{activity_id}")
 async def delete_activity(activity_id: int, request: Request):
     """Soft-delete a single activity (move to recycle bin)."""

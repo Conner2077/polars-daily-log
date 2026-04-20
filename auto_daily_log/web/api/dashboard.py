@@ -24,17 +24,53 @@ async def get_dashboard(
             "WHERE date(timestamp) = ? AND deleted_at IS NULL GROUP BY category",
             (target,),
         )
-    pending = await db.fetch_all(
-        "SELECT COUNT(*) as count FROM worklog_drafts WHERE date = ? AND status = 'pending_review'", (target,)
+    # Pending count = legacy worklog_drafts + new-pipeline summaries.
+    # Both tables are still written to — legacy flow (auto_approve + manual
+    # review) and new pipeline (scope_outputs + direct publish) coexist.
+    # Orphan guard on legacy side: skip empty-summary drafts ('[]' / NULL),
+    # which are typically LLM-failure residue and can't be acted on.
+    # Skip guard on new side mirrors MyLogs.vue:355 `unpublishedCount`:
+    # require non-sentinel issue_key + a publisher on the output so the
+    # badge only surfaces items the user can actually push somewhere.
+    pending_legacy = await db.fetch_one(
+        "SELECT COUNT(*) AS count FROM worklog_drafts "
+        "WHERE date = ? AND status = 'pending_review' "
+        "  AND summary IS NOT NULL AND summary != '[]' AND summary != ''",
+        (target,),
     )
-    submitted = await db.fetch_all(
-        "SELECT SUM(time_spent_sec) as total FROM worklog_drafts WHERE date = ? AND status = 'submitted'", (target,)
+    pending_new = await db.fetch_one(
+        "SELECT COUNT(*) AS count FROM summaries s "
+        "JOIN scope_outputs so ON so.id = s.output_id "
+        "WHERE s.date = ? "
+        "  AND s.published_id IS NULL "
+        "  AND s.issue_key IS NOT NULL AND s.issue_key != '' "
+        "  AND s.issue_key NOT IN ('ALL', 'DAILY') "
+        "  AND COALESCE(so.publisher_name, '') != ''",
+        (target,),
+    )
+    pending_count = (
+        (pending_legacy["count"] if pending_legacy else 0)
+        + (pending_new["count"] if pending_new else 0)
+    )
+    submitted_legacy = await db.fetch_one(
+        "SELECT COALESCE(SUM(time_spent_sec), 0) AS total FROM worklog_drafts "
+        "WHERE date = ? AND status = 'submitted'",
+        (target,),
+    )
+    submitted_new = await db.fetch_one(
+        "SELECT COALESCE(SUM(time_spent_sec), 0) AS total FROM summaries "
+        "WHERE date = ? AND published_id IS NOT NULL",
+        (target,),
+    )
+    submitted_total = (
+        (submitted_legacy["total"] or 0)
+        + (submitted_new["total"] or 0)
     )
     return {
         "date": target,
         "activity_summary": activities,
-        "pending_review_count": pending[0]["count"] if pending else 0,
-        "submitted_hours": round((submitted[0]["total"] or 0) / 3600, 1) if submitted else 0,
+        "pending_review_count": pending_count,
+        "submitted_hours": round(submitted_total / 3600, 1),
     }
 
 

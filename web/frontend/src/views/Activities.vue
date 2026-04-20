@@ -107,6 +107,14 @@
             >
               {{ viewMode === 'table' ? '时间轴视图' : '表格视图' }}
             </el-button>
+            <el-button
+              v-if="failedCount > 0"
+              size="small"
+              :loading="retryingFailed"
+              @click="retryFailedForDate"
+            >
+              重新识别失败项（{{ failedCount }}）
+            </el-button>
             <el-popconfirm
               title="移入回收站？可在 Settings 中恢复"
               confirm-button-text="移入回收站"
@@ -321,6 +329,12 @@ const totalHours = computed(() => {
   return (sec / 3600).toFixed(1)
 })
 
+const failedCount = computed(() =>
+  activities.value.filter(a => a.llm_summary === '(failed)').length
+)
+
+const retryingFailed = ref(false)
+
 const subtitleText = computed(() => {
   if (!selectedDate.value) {
     return dates.value.length > 0
@@ -394,6 +408,25 @@ async function deleteAllForDate() {
   selectedDate.value = null
   activities.value = []
   await loadDates()
+}
+
+async function retryFailedForDate() {
+  if (!selectedDate.value) return
+  retryingFailed.value = true
+  try {
+    const res = await api.retryFailedActivities(selectedDate.value)
+    const n = res.data?.count ?? 0
+    if (n > 0) {
+      ElMessage.success(`已重新入队 ${n} 条，几秒后刷新查看结果`)
+    } else {
+      ElMessage.info('没有需要重试的失败项')
+    }
+    await selectDate(selectedDate.value)
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '重新识别失败')
+  } finally {
+    retryingFailed.value = false
+  }
 }
 
 function formatTime(ts) {

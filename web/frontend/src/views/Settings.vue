@@ -1061,6 +1061,45 @@ async function checkEngine(name) {
     checkingEngine.value = null
   }
 }
+const importFileInput = ref(null)
+
+async function exportEngines() {
+  try {
+    const r = await api.exportLLMEngines()
+    const blob = new Blob([JSON.stringify(r.data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'llm-engines.json'
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('已导出')
+  } catch (e) {
+    ElMessage.error('导出失败')
+  }
+}
+
+function triggerImportFile() {
+  importFileInput.value?.click()
+}
+
+async function handleImportFile(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  try {
+    const text = await file.text()
+    const data = JSON.parse(text)
+    if (!Array.isArray(data)) { ElMessage.error('JSON 格式错误：需要数组'); return }
+    const r = await api.importLLMEngines(data)
+    ElMessage.success(`已导入 ${r.data.imported} 个引擎`)
+    await loadLLMEngines()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '导入失败：请检查 JSON 格式')
+  } finally {
+    event.target.value = ''
+  }
+}
+
 const jiraLogin = ref({ mobile: '', password: '' })
 const jiraLogging = ref(false)
 const jiraLoginResult = ref(null)
