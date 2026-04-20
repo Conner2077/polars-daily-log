@@ -69,13 +69,9 @@ def _resolve_scope_period(scope_type: str, target_date: str, start_date=None, en
 
 
 async def _get_llm_engine(db, request):
-    """Resolve LLM engine from settings or app state."""
-    # Import here to avoid circular imports at module level
-    from .worklogs import _get_llm_engine_from_settings
-    engine = await _get_llm_engine_from_settings(db)
-    if not engine:
-        engine = getattr(request.app.state, "_llm_engine", None)
-    return engine
+    """Resolve default LLM engine from llm_engines table."""
+    from ...summarizer.engine_registry import get_engine_by_name
+    return await get_engine_by_name(db, None)
 
 
 async def _gather_daily_input(db, target_date: str) -> dict:
