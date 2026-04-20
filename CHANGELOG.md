@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.7.4] — 2026-04-20
+
+这次主要收的是 LLM/Jira 配置体验和 summarizer 失败恢复：统一 LLM 配置入口、Jira PAT 可以直接测 + 保存、OCR 识别失败有手动重试按钮、Settings 顶部角标不再对不上内容。
+
+### Changed
+- **LLM 配置统一到 `llm_engines` 表**：删除 `builtin_llm.py` 和 `~/.auto_daily_log/builtin.key` 文件。`install.sh` 解密 `builtin_llm.enc` 后直接 UPSERT 到 `llm_engines` 表（标记 is_default=1），`worklogs.py` / `search.py` 都走表查询，不再有两套读路径打架。升级会保留用户已配置的引擎记录，不会被 builtin 覆盖。
+- **Collector 启动读 settings 表**：`_make_builtin_collector` 改成 async，先读 `monitor_interval_sec` / `monitor_ocr_enabled` / `monitor_ocr_engine` / `monitor_screenshot_retention_days`，以 `config.yaml` 兜底。Web UI 上调的值首次 tick 就生效，不再等第一次 heartbeat 回灌。
+- **`config.yaml` 默认 `ocr_enabled: true`**：匹配 UI 现在会暴露 OCR toggle 的常见用法；已部署的机器保留各自的设置。
+
+### Added
+- **Jira PAT「测试连接」按钮**：Settings → Jira 区，PAT 模式下多一个按钮。成功时不只告诉你「通了」，还会自动把你填的 server_url / username / PAT 存进 settings 表、顺手拉一次 avatar —— 一步到位。`/api/settings/jira-test` 为底层端点，复用 `JiraClient.get_myself()`（新加的 helper，返回完整用户 JSON）。
+- **LLM 引擎 JSON 导入 / 导出**：Settings → LLM 引擎区加两个按钮（`exportEngines` / `triggerImportFile`）。导出含完整 api_key，方便迁移或手动备份；导入是 upsert（按 name 匹配），已存在的会更新。端点：`GET /api/llm-engines/export` / `POST /api/llm-engines/import`。
+- **「重新识别失败项」按钮**：活动记录页在有 `(failed)` 行时右上角出现，点一下把那天所有 `(failed)` 重置为 `NULL` 触发 ActivitySummarizer 5 秒内重跑。以前只能等 24h 冷却（`FAIL_COOLDOWN_HOURS`）或手写 SQL，LLM 临时失效（上游 401、key 过期）场景用户没办法自己救。端点：`POST /api/activities/retry-failed?target_date=...`。
+
+### Fixed
+- **`normalize_base_url` 不再偷偷补 `/v1`**：上版本为了"本机网关少填 /v1"用户补了自动 `/v1`，但把用反代自定义路径（如 `http://localhost:3001` 直接暴露 chat/completions 的自研网关）的用户 URL 改花了、而且悄无声息。现在规范化只做「剥尾部 `/chat/completions`、`/messages`、anthropic 多余的 `/v1`」这种非破坏性操作，别的都信用户填的。`/api/llm-engines` create / update / import 也统一调同一个 normalizer，单引擎 & 多引擎入口行为对齐。
+- **Jira PAT 认证用 Basic Auth**：fanruan Jira 的 PAT 不认 Bearer header，必须用 `Basic base64(username:token)`（见 prior 0.7.3 range 上的 hotfix 承接；本版把"登录后保存 + 拉 avatar"整条链路补齐）。
+- **Jira issue 抓取改走 `JiraClient`**：`/api/issues/fetch/{key}` 原本用 subprocess + curl + cookie。现在改走 `build_jira_client_from_db`，cookie / PAT 两种认证共用一条代码路径，出错类型统一走 `MissingJiraConfig` 异常。
+- **Dashboard 侧边栏 MyLog badge 显示 `1` 但页面空白**：`dashboard.py` 的 `pending_review_count` 只查旧的 `worklog_drafts` 表（已经"砍审批流"的遗物），和 MyLog 页面渲染的新 pipeline `summaries` 表完全不对。改为合并两表：旧表过滤掉 `summary='[]'` 空残留、新表按 MyLogs.vue 的 `unpublishedCount` 规则（非空 issue_key、非 `ALL`/`DAILY` 哨兵、output 有 publisher）。badge 真正反映"有能推的事"。
+- **`install.sh`**：用 `mktemp` 写中间 plaintext，写完 UPSERT DB 后 `rm -f`，避免 `builtin.key` 遗留在文件系统。
+
+### 测试
+- 新增 30+ 回归 case：
+  - `tests/test_api_llm_engines.py` 覆盖 CRUD 规范化 + export/import round-trip
+  - `tests/test_api_activities_retry.py` 覆盖 retry-failed 的 scoped/global/soft-deleted/no-match
+  - `tests/test_api_dashboard_pending.py` 覆盖 orphan 过滤、legacy+new 求和、date 范围、sentinel key、publisher 要求、empty key
+  - `tests/test_url_helper.py` 调整后加了 3 条「保留 bare host 不动」的 case
+  - `tests/test_install_real.py` / `test_install_sh.py` 升级为校验 llm_engines 表而不是 `builtin.key` 文件
+  - `tests/test_phase_p_protocol.py` 改为从 llm_engines 表读，不再 mock `load_builtin_llm_config`
+- 全量 652 passed / 15 skipped。
+
+### 升级注意
+- 有 DB / 安装脚本改动（写 `llm_engines` 表），但向前兼容：现有引擎记录不动，仅 builtin 那条会被 install.sh 重新 upsert 一次。
+- 用户已经写过配置的 `llm_engines` 不受 builtin upsert 影响（is_default 会被转移给 builtin 那条；如果你有自己的主引擎，升级后去 Settings 改回默认即可）。
+- 升级到 0.7.4 后，`~/.auto_daily_log/builtin.key` 文件不再被任何代码读写，可以自己手动删掉（不删也无害）。
+
+---
+
 ## [0.7.3] — 2026-04-20
 
 Hotfix：再修两条 updater 上的 UX 问题。
