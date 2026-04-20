@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.7.2] — 2026-04-20
+
+Hotfix：修"自动更新"在 uv 创建的虚拟环境下失败。
+
+### Fixed
+- **Updater 在 uv venv 里 `No module named pip` 而失败**：`uv venv .venv` 创建的环境默认不装 pip，updater 硬编码 `python -m pip install ...` 直接报错、触发回滚。
+  - 改为运行时探测链：`python -m pip` → `python -m ensurepip --upgrade` → `uv pip install --python <python>` → 报错提示手工修复命令。
+  - 覆盖场景：标准 python venv（走 pip）、uv venv 但保留了 ensurepip（走 ensurepip 自举）、纯 uv venv（走 uv CLI）、都没有（返回 127 + 日志写明修复方法，触发干净回滚）。
+- 新增 5 个测试覆盖 4 条分支 + 错误日志路径（`tests/test_updater_runner.py`）。
+
+### 升级注意
+- 纯运行时修复，无 API / 数据库改动。
+- 如果你用的是 `python -m venv` 创建的 `.venv`（installer 默认路径），升级无需任何额外操作。
+- 如果你之前手工跑过 `uv venv`，升级后"自动更新"就能正常用；无需再 `uv pip install pip`。
+
+---
+
 ## [0.7.1] — 2026-04-20
 
 Hotfix：修 Linux 用户的"定时任务不跑"回归。
