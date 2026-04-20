@@ -14,6 +14,12 @@ Normalization is protocol-aware:
       base must NOT end with /v1, client appends /v1/messages
   - ollama:
       base is just the root, client appends /api/tags|chat|generate
+
+We only **strip** trailing leaf endpoints and, for anthropic, the extra
+`/v1`. We do NOT silently append `/v1` to bare hosts — reverse proxies
+and custom gateways legitimately mount OpenAI-compatible endpoints at
+arbitrary paths, and auto-appending would break them. UX/hinting for
+"forgot /v1" cases belongs in the frontend, not in this normalizer.
 """
 from typing import Optional
 

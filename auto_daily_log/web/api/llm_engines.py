@@ -6,6 +6,8 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from ...summarizer.url_helper import normalize_base_url
+
 router = APIRouter(tags=["llm-engines"])
 
 VALID_PROTOCOLS = {"openai_compat", "anthropic", "ollama"}
@@ -58,11 +60,12 @@ async def create_engine(body: EngineCreate, request: Request):
         raise HTTPException(409, f"引擎 '{body.name}' 已存在")
     if body.is_default:
         await db.execute("UPDATE llm_engines SET is_default = 0")
+    base_url = normalize_base_url(body.base_url, engine=body.protocol)
     await db.execute(
         "INSERT INTO llm_engines (name, display_name, protocol, api_key, model, base_url, is_default) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (body.name, body.display_name, body.protocol, body.api_key,
-         body.model, body.base_url, 1 if body.is_default else 0),
+         body.model, base_url, 1 if body.is_default else 0),
     )
     return {"name": body.name, "status": "created"}
 
@@ -86,7 +89,9 @@ async def update_engine(name: str, body: EngineUpdate, request: Request):
     if body.model is not None:
         updates.append("model = ?"); params.append(body.model)
     if body.base_url is not None:
-        updates.append("base_url = ?"); params.append(body.base_url)
+        protocol_hint = body.protocol or existing["protocol"]
+        updates.append("base_url = ?")
+        params.append(normalize_base_url(body.base_url, engine=protocol_hint))
     if body.is_default is not None:
         if body.is_default:
             await db.execute("UPDATE llm_engines SET is_default = 0")

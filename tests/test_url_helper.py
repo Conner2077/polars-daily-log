@@ -113,6 +113,27 @@ class TestNormalizeBaseUrl:
             "https://api.example.com/v1/chat/completions", "openai_compat"
         ) == "https://api.example.com/v1"
 
+    # ─── openai_compat: bare host is NOT touched ──────────────────────
+    # Auto-appending /v1 would break reverse proxies and custom gateways.
+    # "forgot /v1" hinting belongs in the UI, not the normalizer.
+
+    def test_openai_compat_bare_localhost_preserved(self):
+        """Local gateways stay as-is; UI warns if /v1 is missing."""
+        assert normalize_base_url(
+            "http://localhost:3001", "openai_compat"
+        ) == "http://localhost:3001"
+
+    def test_openai_compat_bare_api_host_preserved(self):
+        assert normalize_base_url(
+            "https://api.openai.com", "openai_compat"
+        ) == "https://api.openai.com"
+
+    def test_openai_compat_proxy_path_preserved(self):
+        """Reverse proxy with custom mount point stays untouched."""
+        assert normalize_base_url(
+            "https://proxy.example.com/openai-proxy", "openai_compat"
+        ) == "https://proxy.example.com/openai-proxy"
+
 
 class TestPutSettingNormalizesBaseUrl:
     @pytest.mark.asyncio
