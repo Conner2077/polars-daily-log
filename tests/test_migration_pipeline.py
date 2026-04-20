@@ -108,6 +108,96 @@ async def test_migration_idempotent(tmp_path):
     assert outputs_1[0]["n"] == outputs_2[0]["n"]
 
 
+# ── Self-repair for drifted time_scopes rows ─────────────────────────
+# Regression: some Linux users' databases ended up with
+# time_scopes.daily.schedule_rule IS NULL after upgrading through an
+# intermediate version that populated time_scopes without carrying the
+# schedule_rule over. The scheduler query filters by
+# `WHERE schedule_rule IS NOT NULL`, so those installs silently stopped
+# firing cron jobs. initialize() must detect and repair this on startup.
+
+
+@pytest.mark.asyncio
+async def test_null_schedule_rule_on_builtin_daily_is_repaired(tmp_path):
+    """If time_scopes.daily.schedule_rule is NULL (from a partial prior
+    migration), re-initializing must back-fill the default schedule."""
+    db_path = tmp_path / "drift.db"
+    db = Database(db_path, embedding_dimensions=4)
+    await db.initialize()
+
+    # Simulate the drifted state.
+    await db.execute(
+        "UPDATE time_scopes SET schedule_rule = NULL WHERE name = 'daily'"
+    )
+    row = await db.fetch_one("SELECT schedule_rule FROM time_scopes WHERE name = 'daily'")
+    assert row["schedule_rule"] is None  # precondition — actually NULL before the repair path runs
+
+    await db.close()
+
+    # Re-open → triggers initialize() → _migrate() → _migrate_pipeline().
+    db2 = Database(db_path, embedding_dimensions=4)
+    await db2.initialize()
+
+    row2 = await db2.fetch_one("SELECT schedule_rule FROM time_scopes WHERE name = 'daily'")
+    await db2.close()
+    assert row2["schedule_rule"] is not None, (
+        "daily.schedule_rule should have been back-filled from summary_types "
+        "(or the built-in default {\"time\":\"18:00\"})"
+    )
+    sched = json.loads(row2["schedule_rule"])
+    assert sched.get("time") == "18:00"
+
+
+@pytest.mark.asyncio
+async def test_null_schedule_rule_on_manual_builtins_stays_null(tmp_path):
+    """Weekly/monthly/quarterly are manual-trigger by design; repair must
+    NOT invent a schedule_rule for them."""
+    db_path = tmp_path / "manual.db"
+    db = Database(db_path, embedding_dimensions=4)
+    await db.initialize()
+    await db.close()
+
+    db2 = Database(db_path, embedding_dimensions=4)
+    await db2.initialize()
+    for name in ("weekly", "monthly", "quarterly"):
+        row = await db2.fetch_one("SELECT schedule_rule FROM time_scopes WHERE name = ?", (name,))
+        assert row is not None
+        assert row["schedule_rule"] is None, (
+            f"{name} is a manual-trigger builtin and must stay schedule_rule=NULL"
+        )
+    await db2.close()
+
+
+@pytest.mark.asyncio
+async def test_null_schedule_rule_prefers_summary_types_value(tmp_path):
+    """If summary_types.<name>.schedule_rule has a user-set value but
+    time_scopes.<name>.schedule_rule is NULL (drift), repair should copy
+    from summary_types, not overwrite with the hardcoded default."""
+    db_path = tmp_path / "userset.db"
+    db = Database(db_path, embedding_dimensions=4)
+    await db.initialize()
+
+    # Simulate: user changed summary_types.daily to 07:30, but time_scopes
+    # row drifted to NULL (happens if an older migration ran with a bug).
+    await db.execute(
+        'UPDATE summary_types SET schedule_rule = \'{"type":"daily","time":"07:30"}\' '
+        "WHERE name = 'daily'"
+    )
+    await db.execute(
+        "UPDATE time_scopes SET schedule_rule = NULL WHERE name = 'daily'"
+    )
+    await db.close()
+
+    db2 = Database(db_path, embedding_dimensions=4)
+    await db2.initialize()
+    row = await db2.fetch_one("SELECT schedule_rule FROM time_scopes WHERE name = 'daily'")
+    await db2.close()
+    assert row["schedule_rule"] is not None
+    sched = json.loads(row["schedule_rule"])
+    assert sched["time"] == "07:30", "repair must preserve user-set time, not clobber with hardcoded 18:00"
+    assert "type" not in sched  # and it must strip the 'type' key per our schema contract
+
+
 # ── worklog_drafts → summaries migration ─────────────────────────────
 
 

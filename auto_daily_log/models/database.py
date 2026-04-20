@@ -358,43 +358,84 @@ class Database:
         if "summary_id" not in audit_col_names:
             await self._conn.execute("ALTER TABLE audit_logs ADD COLUMN summary_id INTEGER")
 
-        # 1. Seed time_scopes from summary_types (idempotent)
-        ts_count = await self._conn.execute("SELECT COUNT(*) AS n FROM time_scopes")
-        ts_row = await ts_count.fetchone()
-        if ts_row["n"] == 0:
-            st_rows = await self.fetch_all("SELECT * FROM summary_types")
-            _SCOPE_TYPE_MAP = {"day": "day", "week": "week", "month": "month", "quarter": "quarter"}
-            for st in st_rows:
+        # 1. Seed time_scopes from summary_types (idempotent, per-row).
+        #
+        # Historical bug (repaired here): the old code gated this migration
+        # on `time_scopes` being globally empty. A user whose DB was touched
+        # by a partial earlier version could end up with `time_scopes.daily`
+        # existing but having `schedule_rule IS NULL`. Because the WHERE
+        # gate saw rows, the block was skipped forever — scheduler query
+        # `WHERE schedule_rule IS NOT NULL` then matched nothing and cron
+        # jobs silently stopped firing (see tests/test_migration_pipeline.py
+        # ::test_null_schedule_rule_on_builtin_daily_is_repaired).
+        #
+        # New shape: walk every summary_types row; if the matching time_scopes
+        # row is missing, insert it; if it exists but has NULL schedule_rule
+        # while summary_types has one, back-fill.
+        _SCOPE_TYPE_MAP = {"day": "day", "week": "week", "month": "month", "quarter": "quarter"}
+        st_rows = await self.fetch_all("SELECT * FROM summary_types")
+        for st in st_rows:
+            try:
+                scope_rule = _json.loads(st["scope_rule"]) if st["scope_rule"] else {}
+            except (_json.JSONDecodeError, TypeError):
+                scope_rule = {}
+            scope_type = _SCOPE_TYPE_MAP.get(scope_rule.get("type", ""), "custom")
+            # summary_types stores {"type":"daily","time":"18:00"};
+            # time_scopes stores {"time":"18:00"} — scope_type implies cadence.
+            sched = None
+            if st.get("schedule_rule"):
                 try:
-                    scope_rule = _json.loads(st["scope_rule"]) if st["scope_rule"] else {}
+                    sr = _json.loads(st["schedule_rule"])
+                    sr.pop("type", None)
+                    sched = _json.dumps(sr, ensure_ascii=False) if sr else None
                 except (_json.JSONDecodeError, TypeError):
-                    scope_rule = {}
-                scope_type = _SCOPE_TYPE_MAP.get(scope_rule.get("type", ""), "custom")
-                # Convert schedule_rule: summary_types stores {"type":"daily","time":"18:00"}
-                # time_scopes stores {"time":"18:00"} (scope_type already implies cadence)
-                sched = None
-                if st.get("schedule_rule"):
-                    try:
-                        sr = _json.loads(st["schedule_rule"])
-                        sr.pop("type", None)
-                        sched = _json.dumps(sr, ensure_ascii=False) if sr else None
-                    except (_json.JSONDecodeError, TypeError):
-                        pass
+                    pass
+
+            existing = await self.fetch_one(
+                "SELECT schedule_rule FROM time_scopes WHERE name = ?", (st["name"],)
+            )
+            if existing is None:
                 await self._conn.execute(
-                    "INSERT OR IGNORE INTO time_scopes "
+                    "INSERT INTO time_scopes "
                     "(name, display_name, scope_type, schedule_rule, is_builtin, enabled) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (st["name"], st["display_name"], scope_type, sched,
                      st.get("is_builtin", 0), st.get("enabled", 1)),
                 )
+            elif existing["schedule_rule"] is None and sched is not None:
+                # Drift repair: user's time_scopes row lost its schedule_rule.
+                # Copy from summary_types (which may hold user-customized time).
+                await self._conn.execute(
+                    "UPDATE time_scopes SET schedule_rule = ? WHERE name = ?",
+                    (sched, st["name"]),
+                )
 
-        # Ensure all builtin scopes exist (covers fresh installs + upgrades)
-        for name, disp, stype in [("daily", "每日日志", "day"), ("weekly", "周报", "week"),
-                                   ("monthly", "月报", "month"), ("quarterly", "季报", "quarter")]:
+        # Ensure all builtin scopes exist (covers fresh installs + upgrades).
+        # `daily` gets a default schedule_rule as a last-resort fallback so a
+        # completely fresh install still schedules a job even if summary_types
+        # somehow lacked one.
+        _BUILTIN_SCOPES = [
+            ("daily",     "每日日志", "day",     '{"time":"18:00"}'),
+            ("weekly",    "周报",     "week",    None),
+            ("monthly",   "月报",     "month",   None),
+            ("quarterly", "季报",     "quarter", None),
+        ]
+        for name, disp, stype, default_sched in _BUILTIN_SCOPES:
             await self._conn.execute(
-                "INSERT OR IGNORE INTO time_scopes (name, display_name, scope_type, is_builtin, enabled) "
-                "VALUES (?, ?, ?, 1, 1)", (name, disp, stype),
+                "INSERT OR IGNORE INTO time_scopes "
+                "(name, display_name, scope_type, schedule_rule, is_builtin, enabled) "
+                "VALUES (?, ?, ?, ?, 1, 1)",
+                (name, disp, stype, default_sched),
             )
+
+        # Final safety net: `daily` must have a schedule_rule. If both
+        # summary_types migration and the INSERT OR IGNORE above left it
+        # NULL, restore the default so the scheduler picks it up.
+        await self._conn.execute(
+            "UPDATE time_scopes SET schedule_rule = ? "
+            "WHERE name = 'daily' AND is_builtin = 1 AND schedule_rule IS NULL",
+            ('{"time":"18:00"}',),
+        )
 
         # 2. Seed default scope_outputs (idempotent)
         so_count = await self._conn.execute("SELECT COUNT(*) AS n FROM scope_outputs")
