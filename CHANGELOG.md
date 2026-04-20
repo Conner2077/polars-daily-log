@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.7.3] — 2026-04-20
+
+Hotfix：再修两条 updater 上的 UX 问题。
+
+### Fixed
+- **刷新页面永远显示"升级失败"**：`updater/state.py` 的 `read_status()` 没有终态清理逻辑，`update_status.json` 里 `phase="failed"` 的记录一旦写入就永久留盘。`/api/updates/status` 每次轮询都返同一条。改：`read_status` 对 `completed`/`failed` 终态加 1 小时 TTL，超过就删文件 + 返回 idle。在制态（installing 等）不清，保留"卡在半路"的信号。
+- **外部升级后点"升级"被 409**：`updater/version_check.py` 的 `_read_cache()` 只校验 24h TTL，不比运行时 `__version__` 与缓存里的 `current` 是否一致。手动 `git pull + pip install` 或用 `/rollback` 切过版本后，UI 仍基于旧缓存显示"可升级"，点下去 `install_update` 发现 `target == __version__` 直接 409。改：缓存中的 `current` 与运行时 `__version__` 不一致就当缓存失效，重拉 GitHub。
+
+### 测试
+- 新增 6 个回归 case：4 个覆盖 state 终态 TTL 的各分支（stale failed/completed → idle；fresh terminal 保留；in-progress 不动），2 个覆盖 version_check drift（版本漂 → 缓存失效；版本一致 → 走缓存）。
+
+### 升级注意
+- 纯运行时修复，无 DB/UI/API schema 变更。
+- 升级后下一次 `read_status` / `check()` 调用就会自动应用新逻辑；旧的 `update_status.json` / `update_check.json` 会被自然替换或清除，无需手动删文件。
+
+---
+
 ## [0.7.2] — 2026-04-20
 
 Hotfix：修"自动更新"在 uv 创建的虚拟环境下失败。
