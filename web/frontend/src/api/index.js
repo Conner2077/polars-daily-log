@@ -99,6 +99,8 @@ export default {
   updateLLMEngine: (name, data) => api.put(`/llm-engines/${name}`, data),
   deleteLLMEngine: (name) => api.delete(`/llm-engines/${name}`),
   checkLLMEngine: (name) => api.post(`/llm-engines/${name}/check`),
+  exportLLMEngines: () => api.get('/llm-engines/export'),
+  importLLMEngines: (data) => api.post('/llm-engines/import', data),
   // Scheduler runs
   getSchedulerRuns: (params = {}) => api.get('/scheduler/runs', { params }),
   // Self-update endpoints — driven by the Settings → 自动更新 tab

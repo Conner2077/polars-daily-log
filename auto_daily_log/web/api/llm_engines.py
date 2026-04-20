@@ -117,6 +117,66 @@ async def delete_engine(name: str, request: Request):
     return {"name": name, "status": "deleted"}
 
 
+@router.get("/llm-engines/export")
+async def export_engines(request: Request):
+    """Export all engines as JSON (includes full api_key for backup/migration)."""
+    db = request.app.state.db
+    rows = await db.fetch_all(
+        "SELECT name, display_name, protocol, api_key, model, base_url, is_default, enabled "
+        "FROM llm_engines ORDER BY is_default DESC, name"
+    )
+    return [dict(r) for r in rows]
+
+
+@router.post("/llm-engines/import")
+async def import_engines(request: Request):
+    """Import engines from JSON array. Existing engines (by name) are updated."""
+    db = request.app.state.db
+    body = await request.json()
+    if not isinstance(body, list):
+        raise HTTPException(400, "请求体必须是 JSON 数组")
+    imported = 0
+    for item in body:
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        name = item["name"]
+        protocol = item.get("protocol", "openai_compat")
+        if protocol not in VALID_PROTOCOLS:
+            protocol = "openai_compat"
+        display_name = item.get("display_name", name)
+        api_key = item.get("api_key", "")
+        model = item.get("model", "")
+        base_url = normalize_base_url(item.get("base_url", ""), engine=protocol)
+        is_default = 1 if item.get("is_default") else 0
+        enabled = 1 if item.get("enabled", True) else 0
+
+        existing = await db.fetch_one("SELECT name FROM llm_engines WHERE name = ?", (name,))
+        if existing:
+            updates = ["display_name = ?", "protocol = ?", "model = ?", "base_url = ?", "enabled = ?"]
+            params = [display_name, protocol, model, base_url, enabled]
+            if api_key:
+                updates.append("api_key = ?")
+                params.append(api_key)
+            if is_default:
+                await db.execute("UPDATE llm_engines SET is_default = 0")
+                updates.append("is_default = 1")
+            params.append(name)
+            await db.execute(
+                f"UPDATE llm_engines SET {', '.join(updates)} WHERE name = ?",
+                tuple(params),
+            )
+        else:
+            if is_default:
+                await db.execute("UPDATE llm_engines SET is_default = 0")
+            await db.execute(
+                "INSERT INTO llm_engines (name, display_name, protocol, api_key, model, base_url, is_default, enabled) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (name, display_name, protocol, api_key, model, base_url, is_default, enabled),
+            )
+        imported += 1
+    return {"imported": imported}
+
+
 @router.post("/llm-engines/{name}/check")
 async def check_engine(name: str, request: Request):
     """Quick health check — try to call the engine with a trivial prompt."""

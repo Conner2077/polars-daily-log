@@ -214,8 +214,11 @@
           </el-table-column>
         </el-table>
 
-        <div style="margin-top: 16px">
+        <div style="margin-top: 16px; display: flex; gap: 8px; align-items: center">
           <el-button round @click="openAddEngine">+ 添加引擎</el-button>
+          <el-button round @click="exportEngines">导出 JSON</el-button>
+          <el-button round @click="triggerImportFile">从 JSON 导入</el-button>
+          <input ref="importFileInput" type="file" accept=".json" style="display: none" @change="handleImportFile" />
         </div>
       </div>
 
