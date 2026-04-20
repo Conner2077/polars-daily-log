@@ -315,8 +315,15 @@ setup_venv() {
 detect_install_mode() {
     if compgen -G "$INSTALL_DIR/wheels/auto_daily_log-*.whl" > /dev/null; then
         INSTALL_MODE="release"
-        # Pick the newest wheel by version (ls -v sorts by version number)
-        WHEEL_PATH="$(ls -v "$INSTALL_DIR/wheels/"auto_daily_log-*.whl | tail -1)"
+        # Pick the newest wheel by version using Python for cross-platform reliability
+        WHEEL_PATH="$(python3 -c "
+import glob, re, sys
+wheels = glob.glob(sys.argv[1] + '/wheels/auto_daily_log-*.whl')
+def ver(p):
+    m = re.search(r'auto_daily_log-([0-9.]+)-', p)
+    return tuple(int(x) for x in m.group(1).split('.')) if m else (0,)
+print(max(wheels, key=ver))
+" "$INSTALL_DIR")"
     elif [ -d "$INSTALL_DIR/auto_daily_log" ] && [ -f "$INSTALL_DIR/pyproject.toml" ]; then
         INSTALL_MODE="dev"
     else
@@ -339,6 +346,12 @@ install_python_deps() {
     if [ "$INSTALL_MODE" = "release" ]; then
         info "Installing from bundled wheel: $(basename "$WHEEL_PATH")"
         pip install --force-reinstall "$WHEEL_PATH[$PLATFORM]" -q -i "$PIP_MIRROR" --trusted-host "$PIP_HOST" 2>&1 | tail -3
+        # Remove older wheels to prevent stale versions on next upgrade
+        for old_whl in "$INSTALL_DIR/wheels/"auto_daily_log-*.whl; do
+            if [ "$old_whl" != "$WHEEL_PATH" ]; then
+                rm -f "$old_whl"
+            fi
+        done
         ok "Installed auto-daily-log[$PLATFORM] (release mode)"
     else
         info "Installing editable source + $PLATFORM dependencies..."
