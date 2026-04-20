@@ -6,6 +6,7 @@
 #   ./pdl {start|stop|restart|status}       # acts on BOTH
 #   ./pdl install                            # run installer
 #   ./pdl clean                              # remove pid/log files
+#   ./pdl test-users {setup N|start|stop|status|clean}  # multi-user testing
 # ─────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -561,6 +562,251 @@ EOF
 }
 
 # ─── Dispatcher ──────────────────────────────────────────────────────
+# ─── Test Users: multi-instance testing ──────────────────────────────
+TEST_USERS_BASE="${STATE_DIR}/test-users"
+TEST_PORT_BASE=8900
+
+_test_user_dir()  { echo "$TEST_USERS_BASE/user-$1"; }
+_test_user_port() { echo $(( TEST_PORT_BASE + $1 )); }
+
+test_users() {
+    local action="$1"; shift || true
+    case "$action" in
+        setup)
+            local count="${1:-3}"
+            local codaily_url="${CODAILY_URL:-http://127.0.0.1:8000}"
+            local codaily_db="${CODAILY_DB:-}"
+            activate_venv
+
+            # Copy LLM engine config from main user (so test users can generate)
+            local main_db="$STATE_DIR/data.db"
+            local llm_json=""
+            if [[ -f "$main_db" ]]; then
+                llm_json="$(sqlite3 "$main_db" "SELECT json_object('name',name,'display_name',display_name,'protocol',protocol,'api_key',api_key,'model',model,'base_url',base_url) FROM llm_engines WHERE is_default=1 LIMIT 1;" 2>/dev/null || echo "")"
+            fi
+
+            info "Setting up $count test user instances ..."
+            info "CoDaily URL: $codaily_url (override with CODAILY_URL=...)"
+            if [[ -n "$codaily_db" && -f "$codaily_db" ]]; then
+                info "CoDaily DB: $codaily_db (will create test users + PDL tokens)"
+            else
+                warn "CODAILY_DB not set or not found — skipping CoDaily user creation"
+                warn "Set CODAILY_DB=/path/to/codaily.db to auto-create test users"
+            fi
+            mkdir -p "$TEST_USERS_BASE"
+
+            for i in $(seq 1 "$count"); do
+                local dir="$(_test_user_dir "$i")"
+                local port="$(_test_user_port "$i")"
+                local name="测试用户$i"
+                mkdir -p "$dir/pids" "$dir/logs"
+
+                # Create a minimal config
+                cat > "$dir/config.yaml" <<YAML
+server:
+  port: $port
+  host: "127.0.0.1"
+system:
+  data_dir: "$dir"
+monitor:
+  enabled: false
+scheduler:
+  enabled: false
+YAML
+                # Initialize DB + seed some fake activities
+                PDL_STATE_DIR="$dir" PDL_SERVER_CONFIG="$dir/config.yaml" \
+                    python -c "
+import asyncio, json, random
+from datetime import datetime, timedelta
+from auto_daily_log.models.database import Database
+
+async def seed():
+    db = Database('$dir/data.db', embedding_dimensions=4)
+    await db.initialize()
+
+    # Set user nickname
+    await db.execute(\"INSERT OR REPLACE INTO settings (key, value) VALUES ('user_nickname', '$name')\")
+
+    # Seed 3 days of fake activities
+    apps = ['VS Code', 'Chrome', 'Terminal', 'Slack', 'Notion', 'Figma']
+    categories = ['coding', 'browsing', 'communication', 'documentation']
+    titles = [
+        'main.py — polars-sql', 'PR Review #142', 'Slack — dev-team',
+        'Design Doc — Q2 roadmap', 'localhost:3000', 'git log --oneline',
+        'JIRA — PLS-$i$((i*100))', 'Meeting Notes', 'API 文档'
+    ]
+    today = datetime.now().date()
+    for day_offset in range(3):
+        d = today - timedelta(days=day_offset)
+        for hour in range(9, 18):
+            app = random.choice(apps)
+            cat = random.choice(categories)
+            title = random.choice(titles)
+            ts = datetime(d.year, d.month, d.day, hour, random.randint(0, 59))
+            await db.execute(
+                'INSERT INTO activities (timestamp, app_name, window_title, category, duration_sec, machine_id) '
+                'VALUES (?, ?, ?, ?, ?, ?)',
+                (ts.isoformat(), app, title, cat, random.randint(60, 1800), 'local'),
+            )
+    # Create CoDaily test user + PDL token if CODAILY_DB is set
+    codaily_db_path = '$codaily_db'
+    pdl_token = ''
+    if codaily_db_path:
+        import hashlib, secrets, aiosqlite
+        jira_username = 'test-user-$i'
+
+        async with aiosqlite.connect(codaily_db_path) as cdb:
+            cdb.row_factory = aiosqlite.Row
+            # Create invite (whitelist)
+            await cdb.execute(
+                'INSERT OR IGNORE INTO invites (jira_username, invited_by, note) VALUES (?, ?, ?)',
+                (jira_username, 'pdl-test-setup', 'Auto-created test user $i'),
+            )
+            # Create user
+            await cdb.execute(
+                'INSERT OR REPLACE INTO users (jira_username, display_name, email) VALUES (?, ?, ?)',
+                (jira_username, '$name', f'test{$i}@example.com'),
+            )
+            # Generate PDL token
+            pdl_token = secrets.token_hex(32)
+            token_hash = hashlib.sha256(pdl_token.encode()).hexdigest()
+            await cdb.execute(
+                'INSERT INTO sessions (token_hash, jira_username, client_kind, label) VALUES (?, ?, ?, ?)',
+                (token_hash, jira_username, 'pdl-publisher', 'pdl-test-$i'),
+            )
+            await cdb.commit()
+
+    # Add CoDaily publisher output under daily scope
+    codaily_config = json.dumps({'url': '$codaily_url', 'token': pdl_token, 'scope': 'day'})
+    existing_codaily = await db.fetch_one(
+        \"SELECT id FROM scope_outputs WHERE scope_name='daily' AND publisher_name='codaily'\"
+    )
+    if not existing_codaily:
+        await db.execute(
+            'INSERT INTO scope_outputs '
+            '(scope_name, display_name, output_mode, publisher_name, publisher_config, auto_publish, enabled) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?)',
+            ('daily', '日志广场', 'single', 'codaily', codaily_config, 0, 1),
+        )
+
+    # Copy LLM engine from main user
+    llm_json = '''$llm_json'''
+    if llm_json.strip():
+        import json as jj
+        try:
+            eng = jj.loads(llm_json)
+            await db.execute(
+                'INSERT OR REPLACE INTO llm_engines '
+                '(name, display_name, protocol, api_key, model, base_url, is_default, enabled) '
+                'VALUES (?, ?, ?, ?, ?, ?, 1, 1)',
+                (eng['name'], eng['display_name'], eng['protocol'],
+                 eng['api_key'], eng['model'], eng['base_url']),
+            )
+        except Exception:
+            pass
+
+    await db.close()
+    token_status = f', CoDaily token={pdl_token[:8]}...' if pdl_token else ', CoDaily token=待设置'
+    print(f'  user-$i: port=$port{token_status}')
+
+asyncio.run(seed())
+"
+            done
+            ok "Created $count test user instances (ports $(_test_user_port 1)-$(_test_user_port "$count"))"
+            echo "  Start all:  ${BOLD}pdl test-users start${NC}"
+            echo "  Stop all:   ${BOLD}pdl test-users stop${NC}"
+            ;;
+
+        start)
+            activate_venv
+            local started=0
+            for dir in "$TEST_USERS_BASE"/user-*; do
+                [[ -d "$dir" ]] || continue
+                local i="${dir##*user-}"
+                local port="$(_test_user_port "$i")"
+                local pidfile="$dir/pids/server.pid"
+                local logfile="$dir/logs/server.log"
+
+                if pid="$(cat "$pidfile" 2>/dev/null)" && pid_alive "$pid"; then
+                    warn "user-$i already running (PID $pid, port $port)"
+                    continue
+                fi
+
+                cd "$SCRIPT_DIR"
+                nohup python -u -m auto_daily_log \
+                    --config "$dir/config.yaml" \
+                    --port "$port" \
+                    > "$logfile" 2>&1 &
+                echo "$!" > "$pidfile"
+                started=$((started + 1))
+            done
+
+            sleep 2
+            for dir in "$TEST_USERS_BASE"/user-*; do
+                [[ -d "$dir" ]] || continue
+                local i="${dir##*user-}"
+                local port="$(_test_user_port "$i")"
+                local pid="$(cat "$dir/pids/server.pid" 2>/dev/null)"
+                if pid_alive "$pid"; then
+                    ok "user-$i: http://127.0.0.1:$port (PID $pid)"
+                else
+                    err "user-$i: failed to start on port $port"
+                fi
+            done
+            ;;
+
+        stop)
+            for dir in "$TEST_USERS_BASE"/user-*; do
+                [[ -d "$dir" ]] || continue
+                local i="${dir##*user-}"
+                local pidfile="$dir/pids/server.pid"
+                local pid="$(cat "$pidfile" 2>/dev/null || true)"
+                if [[ -n "$pid" ]] && pid_alive "$pid"; then
+                    kill_tree "$pid"
+                    rm -f "$pidfile"
+                    ok "user-$i stopped"
+                fi
+            done
+            ;;
+
+        status)
+            local found=0
+            for dir in "$TEST_USERS_BASE"/user-*; do
+                [[ -d "$dir" ]] || continue
+                found=1
+                local i="${dir##*user-}"
+                local port="$(_test_user_port "$i")"
+                local pid="$(cat "$dir/pids/server.pid" 2>/dev/null || true)"
+                if [[ -n "$pid" ]] && pid_alive "$pid"; then
+                    ok "user-$i: running on http://127.0.0.1:$port (PID $pid)"
+                else
+                    echo "○ user-$i: stopped (port $port)"
+                fi
+            done
+            [[ $found -eq 0 ]] && warn "No test users. Run: pdl test-users setup 3"
+            ;;
+
+        clean)
+            # Stop all first
+            test_users stop
+            if [[ -d "$TEST_USERS_BASE" ]]; then
+                rm -rf "$TEST_USERS_BASE"
+                ok "Removed all test user data"
+            fi
+            ;;
+
+        *)
+            echo "Usage: pdl test-users {setup N|start|stop|status|clean}"
+            echo ""
+            echo "  setup N    Create N isolated test instances with fake data"
+            echo "  start      Start all test instances"
+            echo "  stop       Stop all test instances"
+            echo "  status     Show running status"
+            echo "  clean      Stop and delete all test data"
+            ;;
+    esac
+}
+
 main() {
     local cmd="${1:-help}"
     shift || true
@@ -628,6 +874,10 @@ main() {
             esac
             ;;
         clean)    do_clean ;;
+        test-users)
+            local action="${1:-help}"; shift || true
+            test_users "$action" "$@"
+            ;;
         help|-h|--help) usage ;;
         *)
             err "Unknown command: $cmd"
