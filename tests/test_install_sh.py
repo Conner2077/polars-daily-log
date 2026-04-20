@@ -326,40 +326,31 @@ class TestConfigGeneration:
 class TestBuiltinLLM:
     """Step 8: passphrase-protected built-in LLM config."""
 
-    def test_correct_passphrase_creates_builtin_key(self, tmp_path):
+    def test_correct_passphrase_configures_builtin_engine(self, tmp_path):
         root = _setup_release_layout(tmp_path / "pdl")
-        home = root / "_home"
         r = _run_install(root, env_extra={
             "PDL_ROLE": "server",
             "PDL_BUILTIN_PASSPHRASE": "polars",
         })
         assert r.returncode == 0, f"STDERR:\n{r.stderr}\nSTDOUT:\n{r.stdout}"
-        key_file = home / ".auto_daily_log" / "builtin.key"
-        assert key_file.exists(), "builtin.key not created"
-        # Check file permissions (0600)
-        mode = key_file.stat().st_mode & 0o777
-        assert mode == 0o600, f"Expected 0600, got {oct(mode)}"
+        assert "Built-in LLM configured" in r.stdout
 
     def test_wrong_passphrase_warns_and_continues(self, tmp_path):
         root = _setup_release_layout(tmp_path / "pdl")
-        home = root / "_home"
         r = _run_install(root, env_extra={
             "PDL_ROLE": "server",
             "PDL_BUILTIN_PASSPHRASE": "wrong-pass",
         })
         assert r.returncode == 0, "Should not fail on wrong passphrase"
         assert "Wrong passphrase" in r.stdout or "口令错误" in r.stdout or "wrong" in r.stdout.lower()
-        assert not (home / ".auto_daily_log" / "builtin.key").exists()
 
     def test_empty_passphrase_skips(self, tmp_path):
         root = _setup_release_layout(tmp_path / "pdl")
-        home = root / "_home"
         r = _run_install(root, env_extra={
             "PDL_ROLE": "server",
             # No PDL_BUILTIN_PASSPHRASE, no tty → skip
         })
         assert r.returncode == 0, r.stderr
-        assert not (home / ".auto_daily_log" / "builtin.key").exists()
 
     def test_no_enc_file_skips_silently(self, tmp_path):
         root = _setup_release_layout(tmp_path / "pdl", include_enc=False)

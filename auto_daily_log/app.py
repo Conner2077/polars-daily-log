@@ -44,12 +44,17 @@ class Application:
         self.db = Database(db_path, embedding_dimensions=self.config.embedding.dimensions)
         await self.db.initialize()
 
-    def _make_builtin_collector(self):
+    async def _make_builtin_collector(self):
         """Build the in-process CollectorRuntime backed by HTTPBackend.
 
         Called after the uvicorn server is listening on the loopback port
         so the collector's first request (heartbeat / activity POST)
         succeeds immediately.
+
+        Reads initial values from the settings table (Web UI) with
+        config.yaml as fallback, so the collector starts with user-
+        customised values immediately (subsequent changes are pushed
+        via the heartbeat config_override mechanism).
         """
         from auto_daily_log.models.backends import HTTPBackend
         from auto_daily_log_collector.config import CollectorConfig
@@ -68,6 +73,32 @@ class Application:
                 "_register_builtin_collector must run before _make_builtin_collector"
             )
 
+        # Read settings table to override config.yaml defaults
+        rows = await self.db.fetch_all(
+            "SELECT key, value FROM settings WHERE key IN "
+            "('monitor_interval_sec', 'monitor_ocr_enabled', 'monitor_ocr_engine', "
+            "'monitor_screenshot_retention_days')"
+        )
+        s = {r["key"]: r["value"] for r in rows}
+
+        def _int(val, default):
+            try:
+                return int(val)
+            except (TypeError, ValueError):
+                return default
+
+        def _bool(val, default):
+            if val is None:
+                return default
+            return str(val).lower() in ("true", "1", "yes", "on")
+
+        interval_sec = _int(s.get("monitor_interval_sec"), m.interval_sec)
+        ocr_enabled = _bool(s.get("monitor_ocr_enabled"), m.ocr_enabled)
+        ocr_engine = s.get("monitor_ocr_engine") or m.ocr_engine
+        screenshot_retention_days = _int(
+            s.get("monitor_screenshot_retention_days"), m.screenshot_retention_days
+        )
+
         backend = HTTPBackend(
             server_url=server_url,
             token=self._builtin_token,
@@ -85,10 +116,10 @@ class Application:
         collector_config = CollectorConfig(
             server_url=server_url,
             name="Built-in (this machine)",
-            interval_sec=m.interval_sec,
-            ocr_enabled=m.ocr_enabled,
-            ocr_engine=m.ocr_engine,
-            screenshot_retention_days=m.screenshot_retention_days,
+            interval_sec=interval_sec,
+            ocr_enabled=ocr_enabled,
+            ocr_engine=ocr_engine,
+            screenshot_retention_days=screenshot_retention_days,
             idle_threshold_sec=m.idle_threshold_sec,
             phash_enabled=m.phash_enabled,
             phash_threshold=m.phash_threshold,
@@ -535,7 +566,7 @@ class Application:
                     "skipping built-in collector startup (server continues)"
                 )
             else:
-                self.monitor = self._make_builtin_collector()
+                self.monitor = await self._make_builtin_collector()
                 monitor_task = asyncio.create_task(self.monitor.run())
                 from auto_daily_log_collector.monitor_internals.watchdog import WecomWatchdog
                 dump_dir = self.config.system.resolved_data_dir / "watchdog"

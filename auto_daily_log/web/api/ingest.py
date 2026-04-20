@@ -333,7 +333,8 @@ async def heartbeat(
         db = request.app.state.db
         rows = await db.fetch_all(
             "SELECT key, value FROM settings WHERE key IN "
-            "('monitor_ocr_enabled', 'monitor_ocr_engine', 'monitor_interval_sec')"
+            "('monitor_ocr_enabled', 'monitor_ocr_engine', 'monitor_interval_sec', "
+            "'monitor_screenshot_retention_days')"
         )
         s = {r["key"]: r["value"] for r in rows}
         if s:
@@ -350,6 +351,11 @@ async def heartbeat(
             if "monitor_interval_sec" in s and s["monitor_interval_sec"]:
                 try:
                     settings_override["interval_sec"] = int(s["monitor_interval_sec"])
+                except (TypeError, ValueError):
+                    pass
+            if "monitor_screenshot_retention_days" in s and s["monitor_screenshot_retention_days"]:
+                try:
+                    settings_override["screenshot_retention_days"] = int(s["monitor_screenshot_retention_days"])
                 except (TypeError, ValueError):
                     pass
             if settings_override:

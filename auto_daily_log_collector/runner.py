@@ -36,6 +36,7 @@ class CollectorRuntime:
     # Allow-list of config keys honored from server override
     HONORED_OVERRIDE_KEYS = {
         "interval_sec", "ocr_enabled", "ocr_engine",
+        "screenshot_retention_days",
         "blocked_apps", "blocked_urls",
     }
 

@@ -9,18 +9,14 @@ router = APIRouter(tags=["search"])
 
 
 async def _get_searcher(request) -> Searcher:
-    """Build a Searcher using embedding config from settings table."""
+    """Build a Searcher using embedding config from the default llm_engines entry."""
     db = request.app.state.db
 
-    api_key = (await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_api_key'") or {}).get("value", "")
-    base_url = (await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_base_url'") or {}).get("value", "")
-
-    if not api_key:
-        from ...builtin_llm import load_builtin_llm_config
-        builtin = load_builtin_llm_config()
-        if builtin:
-            api_key = builtin.get("api_key", "")
-            base_url = base_url or builtin.get("base_url", "")
+    row = await db.fetch_one(
+        "SELECT api_key, base_url FROM llm_engines WHERE is_default = 1 AND enabled = 1 LIMIT 1"
+    )
+    api_key = (row.get("api_key") or "") if row else ""
+    base_url = (row.get("base_url") or "") if row else ""
 
     if not api_key:
         raise HTTPException(503, "Search unavailable — LLM API Key not configured in Settings")

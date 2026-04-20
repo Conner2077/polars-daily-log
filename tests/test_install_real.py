@@ -146,13 +146,17 @@ class TestCleanInstallServer:
         # Collector config NOT created (role=server)
         assert not (install_dir / "collector.yaml").exists()
 
-        # Builtin LLM decrypted
-        builtin_key = data_dir / "builtin.key"
+        # Builtin LLM written to llm_engines table
         if (install_dir / "builtin_llm.enc").exists():
-            assert builtin_key.exists(), "builtin.key not written"
-            cfg = json.loads(builtin_key.read_text())
-            assert "api_key" in cfg
-            assert oct(builtin_key.stat().st_mode & 0o777) == "0o600"
+            db_path = data_dir / "data.db"
+            assert db_path.exists()
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                "SELECT api_key FROM llm_engines WHERE name = 'builtin' AND is_default = 1"
+            ).fetchone()
+            conn.close()
+            assert row is not None, "builtin engine not inserted into llm_engines"
+            assert row[0], "api_key is empty"
 
         # Import chain works from installed wheel
         venv_python = str(install_dir / ".venv" / "bin" / "python3")
@@ -160,7 +164,6 @@ class TestCleanInstallServer:
             "from auto_daily_log.app import Application",
             "from auto_daily_log.web.app import create_app",
             "from auto_daily_log.updater import version_check",
-            "from auto_daily_log.builtin_llm import load_builtin_llm_config",
             "from packaging.version import Version",
         ]:
             result = subprocess.run(
@@ -217,7 +220,12 @@ class TestCleanInstallCollector:
         assert (install_dir / "collector.yaml").exists()
 
         # Builtin LLM NOT configured (collector doesn't need it)
-        assert not (home / ".auto_daily_log" / "builtin.key").exists()
+        db_path = home / ".auto_daily_log" / "data.db"
+        if db_path.exists():
+            conn = sqlite3.connect(db_path)
+            row = conn.execute("SELECT name FROM llm_engines WHERE name = 'builtin'").fetchone()
+            conn.close()
+            assert row is None, "collector install should not insert builtin engine"
 
 
 # ---------------------------------------------------------------------------
@@ -364,27 +372,41 @@ class TestUpgradeInstall:
         # Config must be untouched
         assert (install_dir / "config.yaml").read_text() == custom_config
 
-    def test_upgrade_does_not_overwrite_builtin_key(self, tmp_path, wheel_path):
-        """Existing builtin.key must not be overwritten on upgrade."""
+    def test_upgrade_preserves_existing_llm_engine(self, tmp_path, wheel_path):
+        """Existing llm_engines entries must survive upgrade without passphrase."""
         install_dir = tmp_path / "pdl"
         home = tmp_path / "home"
         home.mkdir()
         data_dir = home / ".auto_daily_log"
         data_dir.mkdir(parents=True)
 
-        # Pre-existing builtin.key from a previous install
-        old_key = '{"engine":"openai_compat","api_key":"sk-old-key","base_url":"https://old","model":"old"}'
-        builtin = data_dir / "builtin.key"
-        builtin.write_text(old_key)
-        builtin.chmod(0o600)
+        # Pre-existing DB with a user-configured engine
+        db_path = data_dir / "data.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS llm_engines ("
+            "name TEXT PRIMARY KEY, display_name TEXT NOT NULL, protocol TEXT NOT NULL DEFAULT 'openai_compat', "
+            "api_key TEXT, model TEXT, base_url TEXT, is_default INTEGER DEFAULT 0, enabled INTEGER DEFAULT 1, "
+            "created_at TEXT DEFAULT (datetime('now')))"
+        )
+        conn.execute(
+            "INSERT INTO llm_engines (name, display_name, protocol, api_key, model, base_url, is_default) "
+            "VALUES ('user-engine', 'My Engine', 'openai_compat', 'sk-old-key', 'old-model', 'https://old', 1)"
+        )
+        conn.commit()
+        conn.close()
 
         _make_tarball_layout(install_dir, wheel_path)
 
-        # Install WITHOUT passphrase → should not touch existing key
+        # Install WITHOUT passphrase → should not touch existing engine
         r = _run_install(install_dir, home, role="server")
         assert r.returncode == 0, f"STDOUT:\n{r.stdout[-2000:]}"
 
-        assert builtin.read_text() == old_key
+        conn = sqlite3.connect(db_path)
+        row = conn.execute("SELECT api_key FROM llm_engines WHERE name = 'user-engine'").fetchone()
+        conn.close()
+        assert row is not None
+        assert row[0] == "sk-old-key"
 
     def test_upgrade_new_tables_added(self, tmp_path, wheel_path):
         """After upgrade, new tables (summary_types etc.) should be created."""

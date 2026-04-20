@@ -473,14 +473,35 @@ setup_builtin_llm() {
         return 0
     fi
 
-    local target="$DATA_DIR/builtin.key"
+    local tmpfile
+    tmpfile="$(mktemp)"
     if openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -base64 \
-        -in "$enc_file" -out "$target" -pass pass:"$passphrase" 2>/dev/null \
-        && python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$target" 2>/dev/null; then
-        chmod 600 "$target"
-        ok "Built-in LLM configured → $target"
+        -in "$enc_file" -out "$tmpfile" -pass pass:"$passphrase" 2>/dev/null \
+        && python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$tmpfile" 2>/dev/null; then
+        # Insert into llm_engines table (the unified LLM config store)
+        local db_file="$DATA_DIR/data.db"
+        python3 -c "
+import json, sqlite3, sys
+cfg = json.load(open(sys.argv[1]))
+conn = sqlite3.connect(sys.argv[2])
+conn.execute('''CREATE TABLE IF NOT EXISTS llm_engines (
+    name TEXT PRIMARY KEY, display_name TEXT NOT NULL,
+    protocol TEXT NOT NULL DEFAULT 'openai_compat',
+    api_key TEXT, model TEXT, base_url TEXT,
+    is_default INTEGER DEFAULT 0, enabled INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now')))''')
+conn.execute('UPDATE llm_engines SET is_default = 0')
+conn.execute('''INSERT OR REPLACE INTO llm_engines
+    (name, display_name, protocol, api_key, model, base_url, is_default)
+    VALUES (?, ?, ?, ?, ?, ?, 1)''',
+    ('builtin', 'Built-in', cfg.get('engine','openai_compat'),
+     cfg.get('api_key',''), cfg.get('model',''), cfg.get('base_url','')))
+conn.commit(); conn.close()
+" "$tmpfile" "$db_file"
+        rm -f "$tmpfile"
+        ok "Built-in LLM configured → llm_engines table"
     else
-        rm -f "$target"
+        rm -f "$tmpfile"
         warn "Wrong passphrase — skipped (re-run install.sh to retry)"
     fi
 }

@@ -5,7 +5,7 @@ server:
 monitor:
   enabled: true   # false 则为纯 server 模式（不采集本机，只接收远程 collector 数据）
   interval_sec: 30
-  ocr_enabled: false
+  ocr_enabled: true
   ocr_engine: auto
   screenshot_retention_days: 7
   privacy:

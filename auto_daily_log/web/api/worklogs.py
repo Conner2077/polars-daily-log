@@ -185,53 +185,9 @@ async def generate_summary(body: GenerateRequest, request: Request):
 
 
 async def _get_llm_engine_from_settings(db):
-    """Build LLM engine from settings table (user may have configured via Web UI).
-
-    Falls back to the install-time built-in config (~/.auto_daily_log/builtin.key)
-    if the user hasn't set their own key — saves first-run friction when the
-    author supplied a shared passphrase at install time.
-    """
-    from ...config import LLMConfig, LLMProviderConfig
-    from ...summarizer.engine import VALID_PROTOCOLS, get_llm_engine
-    from ...summarizer.url_helper import normalize_base_url
-    from ...builtin_llm import load_builtin_llm_config
-
-    protocol = (await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_engine'") or {}).get("value", "") or "openai_compat"
-    api_key = (await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_api_key'") or {}).get("value", "")
-    model = (await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_model'") or {}).get("value", "")
-    base_url = (await db.fetch_one("SELECT value FROM settings WHERE key = 'llm_base_url'") or {}).get("value", "")
-
-    if not api_key:
-        builtin = load_builtin_llm_config()
-        if builtin:
-            protocol = builtin.get("engine") or "openai_compat"
-            api_key = builtin.get("api_key", "")
-            model = model or builtin.get("model", "")
-            base_url = base_url or builtin.get("base_url", "")
-
-    if not api_key:
-        return None
-
-    if protocol not in VALID_PROTOCOLS:
-        protocol = "openai_compat"
-
-    default_url = {
-        "openai_compat": "https://api.moonshot.cn/v1",
-        "anthropic": "https://api.anthropic.com",
-        "ollama": "http://localhost:11434",
-    }[protocol]
-    default_model = {
-        "openai_compat": "moonshot-v1-8k",
-        "anthropic": "claude-sonnet-4-20250514",
-        "ollama": "llama3",
-    }[protocol]
-
-    model = model or default_model
-    base_url = normalize_base_url(base_url, engine=protocol) or default_url
-
-    provider = LLMProviderConfig(api_key=api_key, model=model, base_url=base_url)
-    config = LLMConfig(engine=protocol, **{protocol: provider})
-    return get_llm_engine(config)
+    """Build LLM engine from the default entry in llm_engines table."""
+    from ...summarizer.engine_registry import get_engine_by_name
+    return await get_engine_by_name(db, None)
 
 
 async def _generate_daily(db, request, today, start, end):

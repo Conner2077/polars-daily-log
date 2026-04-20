@@ -8,15 +8,6 @@ from auto_daily_log.summarizer.claude_engine import ClaudeEngine
 from auto_daily_log.summarizer.ollama import OllamaEngine
 from auto_daily_log.config import LLMConfig, LLMProviderConfig
 
-# Deterministic builtin config for CI — the real builtin.key only exists
-# on the author's machine. Tests mock load_builtin_llm_config to return
-# this so the fallback path is exercised without a real key file.
-_FAKE_BUILTIN = {
-    "engine": "openai_compat",
-    "api_key": "sk-kimi-test-builtin-key",
-    "model": "moonshot-v1-8k",
-    "base_url": "https://api.moonshot.cn/v1",
-}
 
 
 class TestValidProtocols:
@@ -150,34 +141,36 @@ class TestCheckLLMEndpoint:
         await db.close()
 
 
-class TestBuiltinKimiFallback:
+class TestLLMEngineFromTable:
+    """_get_llm_engine_from_settings now reads from llm_engines table via engine_registry."""
+
     @pytest.mark.asyncio
-    async def test_fallback_returns_engine_when_settings_empty(self, tmp_path):
+    async def test_returns_engine_from_llm_engines_table(self, tmp_path):
         from auto_daily_log.models.database import Database
         from auto_daily_log.web.api.worklogs import _get_llm_engine_from_settings
 
         db = Database(tmp_path / "t.db", embedding_dimensions=128)
         await db.initialize()
-        with patch("auto_daily_log.builtin_llm.load_builtin_llm_config", return_value=_FAKE_BUILTIN):
-            engine = await _get_llm_engine_from_settings(db)
+        await db.execute(
+            "INSERT INTO llm_engines (name, display_name, protocol, api_key, model, base_url, is_default) "
+            "VALUES ('kimi', 'Kimi', 'openai_compat', 'sk-test-key', 'moonshot-v1-8k', 'https://api.moonshot.cn/v1', 1)"
+        )
+        engine = await _get_llm_engine_from_settings(db)
         assert isinstance(engine, OpenAICompatEngine)
         assert engine._config.model == "moonshot-v1-8k"
         assert engine._config.base_url == "https://api.moonshot.cn/v1"
-        assert engine._config.api_key == "sk-kimi-test-builtin-key"
+        assert engine._config.api_key == "sk-test-key"
         await db.close()
 
     @pytest.mark.asyncio
-    async def test_user_key_overrides_builtin(self, tmp_path):
+    async def test_returns_none_when_no_engine_configured(self, tmp_path):
         from auto_daily_log.models.database import Database
         from auto_daily_log.web.api.worklogs import _get_llm_engine_from_settings
 
         db = Database(tmp_path / "t.db", embedding_dimensions=128)
         await db.initialize()
-        await db.execute("INSERT INTO settings (key, value) VALUES ('llm_api_key', 'sk-user-own-key')")
-        await db.execute("INSERT INTO settings (key, value) VALUES ('llm_engine', 'openai_compat')")
-        with patch("auto_daily_log.builtin_llm.load_builtin_llm_config", return_value=_FAKE_BUILTIN):
-            engine = await _get_llm_engine_from_settings(db)
-        assert engine._config.api_key == "sk-user-own-key"
+        engine = await _get_llm_engine_from_settings(db)
+        assert engine is None
         await db.close()
 
 
