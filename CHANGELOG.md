@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.7.0] — 2026-04-20
+
+CoDaily 日报广场接入、MyLog 动作语义化、多实例测试工具。
+
+### Added
+- **CoDailyPublisher**：新的推送通道，把 PDL 的 summary 按 CoDaily push-contract v1.0 推到日报广场（`POST /api/v1/push`）。Settings → 输出 → 推送平台新增 "CoDaily（日报广场）" 选项，配置 URL / PDL Token / Scope 后即可自动推送。独立于 Jira/Webhook，不与现有路径冲突。
+- **`./pdl test-users`**：多实例测试命令，一键起 N 个 PDL 实例（端口 8900+），可选择同时在 CoDaily DB 里创建对应用户 + PDL Token，自动复用主实例的默认 LLM 引擎配置。`setup / start / stop / status / clean` 五个子命令。
+- **MyLog 生成按钮加图标 + 提示**：每日/周/月/季 chip 前缀 ✨ MagicStick 图标 + "生成<scope>" tooltip，动作语义明显。
+
+### Fixed
+- **Settings 深度链接 bug**：MyLog "+" 跳转 `/settings?tab=scopes` 时，若用户已在 /settings 页面，activeTab 不会跟着更新（因为 `URLSearchParams(window.location.search)` 只在 setup 时读一次）。改成 `useRoute().query` 响应式 + watch。
+
+### Internal
+- `.claude/` 目录加到 `.gitignore`，避免 tooling 临时状态污染提交
+
+### 升级注意
+- 无破坏性变更。新配置项均可选，已有 scope_outputs 不受影响。
+- 首次使用 CoDaily 推送需先在 CoDaily 侧生成 PDL Token，再在 PDL Settings 填入。
+
+---
+
 ## [0.6.0] — 2026-04-19
 
 多引擎 LLM、Webhook 推送、季报、文档全面升级。
