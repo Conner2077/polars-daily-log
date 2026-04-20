@@ -49,7 +49,7 @@ check_prereqs() {
     local uname_s; uname_s="$(uname -s)"
     case "$uname_s" in
         Darwin|Linux) ok "Platform: $uname_s" ;;
-        *) fail "不支持的平台: $uname_s（仅支持 macOS / Linux，Windows 用 install.ps1）"; exit 1 ;;
+        *) fail "不支持的平台: ${uname_s}（仅支持 macOS / Linux，Windows 用 install.ps1）"; exit 1 ;;
     esac
 }
 
@@ -96,7 +96,7 @@ download_and_extract() {
     if [ -d "$INSTALL_DIR" ]; then
         if [ -f "$INSTALL_DIR/VERSION" ]; then
             local existing; existing="$(cat "$INSTALL_DIR/VERSION" 2>/dev/null || echo unknown)"
-            warn "$INSTALL_DIR 已存在（v$existing），将原地覆盖升级"
+            warn "$INSTALL_DIR 已存在（v${existing}），将原地覆盖升级"
             # 停掉可能在跑的进程
             if [ -x "$INSTALL_DIR/pdl" ]; then
                 ("$INSTALL_DIR/pdl" stop 2>/dev/null) || true
