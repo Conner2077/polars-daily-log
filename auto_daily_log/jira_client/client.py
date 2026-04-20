@@ -98,9 +98,19 @@ class JiraClient:
 
     async def test_connection(self) -> bool:
         try:
+            user = await self.get_myself()
+            return user is not None
+        except Exception:
+            return False
+
+    async def get_myself(self) -> Optional[dict]:
+        """Return /rest/api/2/myself JSON, or None on failure."""
+        try:
             url = self._url("/rest/api/2/myself")
             async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
                 response = await client.get(url, headers=self._headers())
-                return response.status_code == 200
+                if response.status_code == 200:
+                    return response.json()
         except Exception:
-            return False
+            pass
+        return None

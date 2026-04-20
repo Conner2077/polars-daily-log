@@ -215,9 +215,11 @@ async function loadUser() {
     const rows = res.data || []
     const nicknameRow = rows.find(r => r.key === 'user_nickname')
     const jiraRow = rows.find(r => r.key === 'jira_username')
+    const jiraDisplayRow = rows.find(r => r.key === 'jira_display_name')
     const avatarRow = rows.find(r => r.key === 'jira_avatar_path')
     userNickname.value = (nicknameRow && nicknameRow.value) || ''
-    jiraUsername.value = (jiraRow && jiraRow.value) || ''
+    // PAT mode stores login name in jira_username and display name separately
+    jiraUsername.value = (jiraDisplayRow && jiraDisplayRow.value) || (jiraRow && jiraRow.value) || ''
     // Cache-bust only when the avatar row actually exists — keeps src stable
     // across renders, so the browser can cache between status polls.
     const bust = avatarRow && avatarRow.updated_at ? avatarRow.updated_at : ''
@@ -410,12 +412,15 @@ async function checkForUpdate() {
 let pollHandle = null
 let jiraHandle = null
 
+function onJiraAuthChanged() { checkJiraStatus() }
+
 onMounted(() => {
   checkJiraStatus()
   loadUser()
   loadDashboardCounts()
   loadDevices()
   checkForUpdate()
+  window.addEventListener('jira-auth-changed', onJiraAuthChanged)
   // refresh sidebar data every 30s
   pollHandle = setInterval(() => {
     loadDashboardCounts()
@@ -428,6 +433,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (pollHandle) clearInterval(pollHandle)
   if (jiraHandle) clearInterval(jiraHandle)
+  window.removeEventListener('jira-auth-changed', onJiraAuthChanged)
 })
 </script>
 

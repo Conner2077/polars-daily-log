@@ -254,39 +254,128 @@ async def list_settings(request: Request):
     db = request.app.state.db
     return await db.fetch_all("SELECT key, value, updated_at FROM settings")
 
+@router.post("/settings/jira-test")
+async def jira_test_connection(request: Request):
+    """Test Jira PAT connection — on success, save settings and fetch avatar."""
+    from ...jira_client.client import JiraClient
+    from ...config import JiraConfig
+    try:
+        body = await request.json()
+        server_url = (body.get("server_url") or "").strip()
+        username = (body.get("username") or "").strip()
+        pat = (body.get("pat") or "").strip()
+
+        if not server_url:
+            return {"success": False, "error": "Server URL 不能为空"}
+        if not username:
+            return {"success": False, "error": "用户名不能为空"}
+        if not pat:
+            return {"success": False, "error": "PAT 不能为空"}
+
+        config = JiraConfig(server_url=server_url, username=username, pat=pat, auth_mode="pat")
+        client = JiraClient(config)
+        user = await client.get_myself()
+        if not user:
+            return {"success": False, "error": "认证失败，请检查用户名和 Token"}
+
+        # Save settings on success (same as SSO login flow)
+        db = request.app.state.db
+        display_name = user.get("displayName", user.get("name", username))
+        await _upsert_setting(db, "jira_server_url", server_url)
+        await _upsert_setting(db, "jira_username", username)  # login name for Basic Auth
+        await _upsert_setting(db, "jira_display_name", display_name)
+        await _upsert_setting(db, "jira_auth_mode", "pat")
+        await _upsert_setting(db, "jira_pat", pat)
+
+        # Fetch avatar using PAT auth (Basic Auth, not cookie)
+        import subprocess, os, base64
+        app_config = getattr(request.app.state, "config", None)
+        data_dir = app_config.system.resolved_data_dir if app_config else Path.home() / ".auto_daily_log"
+        avatar_url = (user.get("avatarUrls") or {}).get("48x48")
+        if avatar_url:
+            data_dir.mkdir(parents=True, exist_ok=True)
+            target = data_dir / "jira_avatar.png"
+            cred = base64.b64encode(f"{username}:{pat}".encode()).decode()
+            clean_env = {**os.environ, "http_proxy": "", "https_proxy": "", "all_proxy": "",
+                         "HTTP_PROXY": "", "HTTPS_PROXY": "", "ALL_PROXY": ""}
+            result = subprocess.run(
+                ["curl", "-sL", "--noproxy", "*",
+                 "-H", f"Authorization: Basic {cred}",
+                 "-o", str(target), avatar_url],
+                capture_output=True, timeout=10, env=clean_env,
+            )
+            if result.returncode == 0 and target.exists() and target.stat().st_size > 0:
+                await _upsert_setting(db, "jira_avatar_path", str(target))
+
+        return {"success": True, "message": f"连接成功 — {display_name}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 @router.get("/settings/jira-status")
 async def jira_status(request: Request):
-    """Check if Jira cookie is still valid, return username or null."""
-    import subprocess, json as _json, os
+    """Check if Jira is authenticated (cookie or PAT), return username or null."""
+    import subprocess, json as _json, os, base64
     db = request.app.state.db
 
     jira_url = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_server_url'") or {}).get("value", "")
-    cookie = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_cookie'") or {}).get("value", "")
+    auth_mode = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_auth_mode'") or {}).get("value", "cookie")
     cached_user = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_username'") or {}).get("value", "")
 
-    if not jira_url or not cookie:
+    if not jira_url:
         return {"logged_in": False, "username": None}
 
     clean_env = {**os.environ, "http_proxy": "", "https_proxy": "", "all_proxy": "", "HTTP_PROXY": "", "HTTPS_PROXY": "", "ALL_PROXY": ""}
+
+    # Build curl auth args based on mode
+    if auth_mode == "pat":
+        pat_username = cached_user or ""
+        pat = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_pat'") or {}).get("value", "")
+        if not pat:
+            return {"logged_in": False, "username": None}
+        cred = base64.b64encode(f"{pat_username}:{pat}".encode()).decode()
+        auth_args = ["-H", f"Authorization: Basic {cred}"]
+    else:
+        cookie = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_cookie'") or {}).get("value", "")
+        if not cookie:
+            return {"logged_in": False, "username": None}
+        auth_args = ["-b", cookie]
+
     try:
-        result = subprocess.run([
-            "curl", "-s", "--noproxy", "*", "-b", cookie,
-            f"{jira_url}/rest/api/2/myself"
-        ], capture_output=True, text=True, timeout=8, env=clean_env)
+        result = subprocess.run(
+            ["curl", "-s", "--noproxy", "*"] + auth_args + [f"{jira_url}/rest/api/2/myself"],
+            capture_output=True, text=True, timeout=8, env=clean_env,
+        )
         if result.stdout.strip().startswith("{"):
             user = _json.loads(result.stdout)
-            username = user.get("displayName", user.get("name"))
-            if username and username != cached_user:
-                await _upsert_setting(db, "jira_username", username)
-            # Refresh avatar only when missing — Jira avatars rarely change.
+            display_name = user.get("displayName", user.get("name"))
+            if auth_mode == "pat":
+                # PAT mode: jira_username holds the login name, display_name is separate
+                await _upsert_setting(db, "jira_display_name", display_name)
+            elif display_name and display_name != cached_user:
+                await _upsert_setting(db, "jira_username", display_name)
+            # Refresh avatar only when missing
             existing_avatar = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_avatar_path'") or {}).get("value", "")
             if not existing_avatar or not Path(existing_avatar).exists():
                 config = getattr(request.app.state, "config", None)
                 data_dir = config.system.resolved_data_dir if config else Path.home() / ".auto_daily_log"
-                avatar_path = _save_jira_avatar(user, cookie, data_dir)
-                if avatar_path:
-                    await _upsert_setting(db, "jira_avatar_path", avatar_path)
-            return {"logged_in": True, "username": username}
+                if auth_mode == "pat":
+                    avatar_url = (user.get("avatarUrls") or {}).get("48x48")
+                    if avatar_url:
+                        data_dir.mkdir(parents=True, exist_ok=True)
+                        target = data_dir / "jira_avatar.png"
+                        dl = subprocess.run(
+                            ["curl", "-sL", "--noproxy", "*", "-H", f"Authorization: Basic {cred}",
+                             "-o", str(target), avatar_url],
+                            capture_output=True, timeout=10, env=clean_env,
+                        )
+                        if dl.returncode == 0 and target.exists() and target.stat().st_size > 0:
+                            await _upsert_setting(db, "jira_avatar_path", str(target))
+                else:
+                    avatar_path = _save_jira_avatar(user, cookie, data_dir)
+                    if avatar_path:
+                        await _upsert_setting(db, "jira_avatar_path", avatar_path)
+            return {"logged_in": True, "username": display_name}
     except Exception:
         pass
     return {"logged_in": False, "username": cached_user}
