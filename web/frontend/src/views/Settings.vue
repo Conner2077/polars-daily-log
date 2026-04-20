@@ -123,16 +123,19 @@
           <el-form-item label="认证方式">
             <el-select v-model="settings.jira_auth_mode" style="width: 100%">
               <el-option label="SSO 自动登录（推荐）" value="cookie" />
-              <el-option label="Bearer Token（PAT）" value="bearer" />
+              <el-option label="Personal Access Token（PAT）" value="pat" />
             </el-select>
           </el-form-item>
-          <el-form-item v-if="settings.jira_auth_mode === 'bearer'" label="Personal Access Token" class="full-col">
-            <el-input v-model="settings.jira_pat" type="password" show-password />
+          <el-form-item v-if="settings.jira_auth_mode === 'pat'" label="用户名" class="full-col">
+            <el-input v-model="settings.jira_username" placeholder="你的 Jira 登录用户名" />
+          </el-form-item>
+          <el-form-item v-if="settings.jira_auth_mode === 'pat'" label="Personal Access Token" class="full-col">
+            <el-input v-model="settings.jira_pat" type="password" show-password placeholder="在 Jira 个人设置中生成" />
           </el-form-item>
         </el-form>
       </div>
 
-      <div v-if="settings.jira_auth_mode === 'cookie'" class="settings-card" style="margin-top: 16px">
+      <div v-if="settings.jira_auth_mode !== 'pat'" class="settings-card" style="margin-top: 16px">
         <div class="card-head-row">
           <h3 class="card-title">SSO 登录</h3>
           <span v-if="jiraLoginResult" :class="['status-pill', jiraLoginResult.success ? 'success' : 'danger']">
@@ -1062,7 +1065,7 @@ const jiraLoginResult = ref(null)
 const settings = ref({
   user_nickname: '',
   monitor_interval_sec: 30, monitor_ocr_enabled: true, monitor_ocr_engine: 'auto',
-  monitor_screenshot_retention_days: 7, jira_server_url: '', jira_pat: '', jira_auth_mode: 'cookie', jira_cookie: '',
+  monitor_screenshot_retention_days: 7, jira_server_url: '', jira_username: '', jira_pat: '', jira_auth_mode: 'cookie', jira_cookie: '',
   llm_engine: 'openai_compat', llm_api_key: '', llm_model: '', llm_base_url: '',
   summarize_prompt: '', auto_approve_prompt: '', period_summary_prompt: '', activity_summary_prompt: '',
   scheduler_enabled: true, scheduler_trigger_time: '18:00',

@@ -49,8 +49,9 @@ class GitConfig(BaseModel):
 
 class JiraConfig(BaseModel):
     server_url: str = ""
+    username: str = ""
     pat: str = ""
-    auth_mode: str = "cookie"  # "bearer" or "cookie"
+    auth_mode: str = "cookie"  # "pat" or "cookie" (legacy "bearer" treated as "pat")
     cookie: str = ""
 
 

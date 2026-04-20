@@ -1,4 +1,5 @@
 from typing import Optional
+import base64
 import httpx
 from ..config import JiraConfig
 
@@ -26,18 +27,25 @@ async def build_jira_client_from_db(db) -> "JiraClient":
     Raises MissingJiraConfig with a human message if anything required is blank.
     """
     jira_url = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_server_url'") or {}).get("value", "")
+    username = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_username'") or {}).get("value", "")
     pat = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_pat'") or {}).get("value", "")
     cookie = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_cookie'") or {}).get("value", "")
     auth_mode = (await db.fetch_one("SELECT value FROM settings WHERE key = 'jira_auth_mode'") or {}).get("value", "cookie")
+
+    # Legacy compat: "bearer" → "pat"
+    if auth_mode == "bearer":
+        auth_mode = "pat"
 
     if not jira_url:
         raise MissingJiraConfig("Jira Server URL 未配置，先到 Settings → Jira 填")
     if auth_mode == "cookie" and not cookie:
         raise MissingJiraConfig("Jira 未登录，先到 Settings → Jira 登录")
-    if auth_mode == "bearer" and not pat:
+    if auth_mode == "pat" and not pat:
         raise MissingJiraConfig("Jira PAT 未配置，先到 Settings → Jira 填")
+    if auth_mode == "pat" and not username:
+        raise MissingJiraConfig("Jira 用户名未配置，先到 Settings → Jira 填")
 
-    return JiraClient(JiraConfig(server_url=jira_url, pat=pat, auth_mode=auth_mode, cookie=cookie))
+    return JiraClient(JiraConfig(server_url=jira_url, username=username, pat=pat, auth_mode=auth_mode, cookie=cookie))
 
 
 class JiraClient:
@@ -51,8 +59,12 @@ class JiraClient:
                 "Content-Type": "application/json",
                 "X-Atlassian-Token": "no-check",
             }
+        # PAT mode: Jira Server/Data Center uses Basic Auth (username:PAT)
+        credentials = base64.b64encode(
+            f"{self._config.username}:{self._config.pat}".encode()
+        ).decode()
         return {
-            "Authorization": f"Bearer {self._config.pat}",
+            "Authorization": f"Basic {credentials}",
             "Content-Type": "application/json",
         }
 

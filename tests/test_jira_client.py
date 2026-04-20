@@ -5,7 +5,7 @@ from auto_daily_log.config import JiraConfig
 
 @pytest.fixture
 def jira_client():
-    config = JiraConfig(server_url="https://jira.example.com", pat="test-token", auth_mode="bearer")
+    config = JiraConfig(server_url="https://jira.example.com", username="testuser", pat="test-token", auth_mode="pat")
     return JiraClient(config)
 
 
@@ -22,9 +22,11 @@ def test_build_worklog_payload(jira_client):
     assert payload["comment"] == "Did some work"
     assert payload["started"] == "2026-04-12T09:00:00.000+0800"
 
-def test_build_auth_headers_bearer(jira_client):
+def test_build_auth_headers_pat(jira_client):
+    import base64
     headers = jira_client._headers()
-    assert headers["Authorization"] == "Bearer test-token"
+    expected = "Basic " + base64.b64encode(b"testuser:test-token").decode()
+    assert headers["Authorization"] == expected
     assert headers["Content-Type"] == "application/json"
 
 
