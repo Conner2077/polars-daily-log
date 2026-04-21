@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.5] — 2026-04-21
+
+补发 0.7.4 漏的两个前端改动 + Jira 头像下载问题。
+
+### Fixed
+- **Jira PAT「测试连接」按钮**：0.7.4 只发了后端端点，前端按钮 + `testJiraConnection` handler 上会话没落盘，本版补上 Settings.vue 模板 + axios helper。
+- **「重新识别失败项」按钮 500 错**：0.7.4 commit 加了 Activities.vue 的调用方 `api.retryFailedActivities(...)`，但 `api/index.js` 的方法定义漏提交，导致前端 undefined → 点击没反应/报错。本版补上 API 定义。
+- **Jira PAT 模式下头像保存成 HTML**：Jira Server 的 `/secure/useravatar` 只认 session cookie，拒绝 Basic Auth（返回 HTML 401）。之前只校验文件非空 + curl 退出码 0，HTML 就被当成头像存了。现在校验文件头（PNG `\x89PNG` / JPEG `\xff\xd8`），非图片直接删掉让前端 fallback 显示首字母。
+
 ## [0.7.4] — 2026-04-20
 
 这次主要收的是 LLM/Jira 配置体验和 summarizer 失败恢复：统一 LLM 配置入口、Jira PAT 可以直接测 + 保存、OCR 识别失败有手动重试按钮、Settings 顶部角标不再对不上内容。
