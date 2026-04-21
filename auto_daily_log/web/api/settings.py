@@ -288,6 +288,8 @@ async def jira_test_connection(request: Request):
         await _upsert_setting(db, "jira_pat", pat)
 
         # Fetch avatar using PAT auth (Basic Auth, not cookie)
+        # Note: Jira Server's /secure/useravatar may reject PAT auth (returns
+        # HTML 401). We validate the downloaded file is actually an image.
         import subprocess, os, base64
         app_config = getattr(request.app.state, "config", None)
         data_dir = app_config.system.resolved_data_dir if app_config else Path.home() / ".auto_daily_log"
@@ -304,8 +306,13 @@ async def jira_test_connection(request: Request):
                  "-o", str(target), avatar_url],
                 capture_output=True, timeout=10, env=clean_env,
             )
-            if result.returncode == 0 and target.exists() and target.stat().st_size > 0:
-                await _upsert_setting(db, "jira_avatar_path", str(target))
+            # Validate: PNG starts with \x89PNG, JPEG with \xff\xd8
+            if result.returncode == 0 and target.exists() and target.stat().st_size > 100:
+                header = target.read_bytes()[:4]
+                if header[:4] == b'\x89PNG' or header[:2] == b'\xff\xd8':
+                    await _upsert_setting(db, "jira_avatar_path", str(target))
+                else:
+                    target.unlink(missing_ok=True)  # HTML 401 etc.
 
         return {"success": True, "message": f"连接成功 — {display_name}"}
     except Exception as e:
@@ -369,8 +376,12 @@ async def jira_status(request: Request):
                              "-o", str(target), avatar_url],
                             capture_output=True, timeout=10, env=clean_env,
                         )
-                        if dl.returncode == 0 and target.exists() and target.stat().st_size > 0:
-                            await _upsert_setting(db, "jira_avatar_path", str(target))
+                        if dl.returncode == 0 and target.exists() and target.stat().st_size > 100:
+                            hdr = target.read_bytes()[:4]
+                            if hdr[:4] == b'\x89PNG' or hdr[:2] == b'\xff\xd8':
+                                await _upsert_setting(db, "jira_avatar_path", str(target))
+                            else:
+                                target.unlink(missing_ok=True)
                 else:
                     avatar_path = _save_jira_avatar(user, cookie, data_dir)
                     if avatar_path:

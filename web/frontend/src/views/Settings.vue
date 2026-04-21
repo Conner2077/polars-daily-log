@@ -132,6 +132,12 @@
           <el-form-item v-if="settings.jira_auth_mode === 'pat'" label="Personal Access Token" class="full-col">
             <el-input v-model="settings.jira_pat" type="password" show-password placeholder="在 Jira 个人设置中生成" />
           </el-form-item>
+          <el-form-item v-if="settings.jira_auth_mode === 'pat'" class="full-col">
+            <el-button type="primary" round :loading="jiraTestLoading" @click="testJiraConnection">测试连接</el-button>
+            <span v-if="jiraTestResult" :style="{ marginLeft: '12px', color: jiraTestResult.success ? '#52c41a' : '#f56c6c' }">
+              {{ jiraTestResult.success ? (jiraTestResult.message || '连接成功') : jiraTestResult.error }}
+            </span>
+          </el-form-item>
         </el-form>
       </div>
 
@@ -1103,6 +1109,26 @@ async function handleImportFile(event) {
 const jiraLogin = ref({ mobile: '', password: '' })
 const jiraLogging = ref(false)
 const jiraLoginResult = ref(null)
+const jiraTestLoading = ref(false)
+const jiraTestResult = ref(null)
+
+async function testJiraConnection() {
+  jiraTestLoading.value = true
+  jiraTestResult.value = null
+  try {
+    const s = settings.value
+    const resp = await api.jiraTest(s.jira_server_url, s.jira_username, s.jira_pat)
+    jiraTestResult.value = resp.data
+    if (resp.data.success) {
+      await loadSettings()
+      window.dispatchEvent(new CustomEvent('jira-auth-changed'))
+    }
+  } catch (e) {
+    jiraTestResult.value = { success: false, error: e.response?.data?.detail || '请求失败' }
+  } finally {
+    jiraTestLoading.value = false
+  }
+}
 
 const settings = ref({
   user_nickname: '',

@@ -12,6 +12,7 @@ export default {
   resumeCollector: (machineId) => api.post(`/collectors/${machineId}/resume`),
   setCollectorConfig: (machineId, config) => api.put(`/collectors/${machineId}/config`, config),
   deleteActivity: (id) => api.delete(`/activities/${id}`),
+  retryFailedActivities: (date) => api.post('/activities/retry-failed', null, { params: { target_date: date } }),
   deleteActivitiesByDate: (date) => api.delete('/activities', { params: { target_date: date } }),
   getRecycledActivities: () => api.get('/activities/recycle'),
   restoreActivities: (date) => api.post('/activities/recycle/restore', null, { params: { target_date: date } }),
@@ -42,6 +43,8 @@ export default {
     api.post('/settings/check-llm', { engine, api_key: apiKey, model, base_url: baseUrl }),
   jiraLogin: (mobile, password, jiraUrl) =>
     api.post('/settings/jira-login', { mobile, password, jira_url: jiraUrl }),
+  jiraTest: (serverUrl, username, pat) =>
+    api.post('/settings/jira-test', { server_url: serverUrl, username, pat }),
   jiraLoginGet: (mobile, password, jiraUrl) =>
     api.get('/settings/do-jira-login', { params: { mobile, password, jira_url: jiraUrl } }),
   getGitRepos: () => api.get('/git-repos'),
