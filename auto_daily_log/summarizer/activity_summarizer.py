@@ -11,11 +11,10 @@ retries them once the LLM recovers.
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any, Callable, Optional
 
 from ..models.database import Database
-from .prompt import render_prompt
+from . import core
 
 
 class ActivitySummarizer:
@@ -103,38 +102,13 @@ class ActivitySummarizer:
         prev_summaries = await self._fetch_prev_summaries(
             row["machine_id"], row["timestamp"]
         )
-        prev_text = self._format_prev(prev_summaries)
 
-        signals: dict = {}
-        try:
-            if row["signals"]:
-                signals = json.loads(row["signals"])
-        except Exception:
-            pass
+        async def engine_call(prompt: str) -> str:
+            return await engine.generate(prompt)
 
-        prompt = render_prompt(
-            prompt_template,
-            prev_summaries=prev_text,
-            timestamp=row["timestamp"],
-            app_name=row["app_name"] or "",
-            window_title=row["window_title"] or "",
-            url=row["url"] or "",
-            tab_title=signals.get("tab_title") or "",
-            ocr_text=signals.get("ocr_text") or "",
-            wecom_group=signals.get("wecom_group_name") or "",
+        summary = await core.summarize_activity(
+            row, prev_summaries, engine_call, prompt_template
         )
-
-        try:
-            raw = await engine.generate(prompt)
-            summary = (raw or "").strip()
-            if not summary:
-                summary = "(failed)"
-            elif len(summary) > 200:
-                # Safety clip — the prompt asks for ≤100 chars but LLMs drift.
-                summary = summary[:200]
-        except Exception as e:
-            print(f"[ActivitySummarizer] LLM failed for row {row['id']}: {e}")
-            summary = "(failed)"
 
         await self._db.execute(
             "UPDATE activities SET llm_summary=?, llm_summary_at=datetime('now') WHERE id=?",
@@ -152,16 +126,6 @@ class ActivitySummarizer:
         )
         # Caller expects chronological (early -> late) order
         return list(reversed(rows))
-
-    def _format_prev(self, prev_rows: list[dict]) -> str:
-        if not prev_rows:
-            return "（无）"
-        lines = []
-        for r in prev_rows:
-            ts_full = r["timestamp"] or ""
-            ts = ts_full[11:16] if len(ts_full) >= 16 else ts_full
-            lines.append(f"- {ts} [{r['app_name']}] {r['llm_summary']}")
-        return "\n".join(lines)
 
     async def backfill_for_date(self, target_date: str, timeout_sec: int = 60) -> int:
         """Synchronously process all pending rows for a given date.

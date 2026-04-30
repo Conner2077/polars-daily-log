@@ -1,13 +1,12 @@
 import json
-import re
 from typing import Optional
 
 from ..models.database import Database
+from . import core
 from .engine import LLMEngine
 from .prompt import (
     DEFAULT_AUTO_APPROVE_PROMPT,
     DEFAULT_SUMMARIZE_PROMPT,
-    render_prompt,
 )
 
 
@@ -59,46 +58,34 @@ class WorklogSummarizer:
             print(f"[Summarizer] No data for {target_date}, skipping generation")
             return []
 
-        activities_text = self._compress_activities(activities)
-        commits_text = self._format_commits(commits)
+        activities_text = core.compress_activities(activities)
+        commits_text = core.format_commits(commits)
+
+        async def engine_call(prompt: str) -> str:
+            return await self._engine.generate(prompt)
 
         # ─── Step 1: full activity summary (raw) ─────────────────────
         summarize_template = prompt_template or await self._get_template(
             "summarize_prompt", DEFAULT_SUMMARIZE_PROMPT, summary_type=summary_type,
         )
-        summarize_prompt = render_prompt(
-            summarize_template,
-            date=target_date,
-            git_commits=commits_text,
-            activities=activities_text,
+        full_summary = await core.generate_full_summary(
+            target_date, activities_text, commits_text, engine_call, summarize_template,
         )
-        print(f"[Summarizer] Step 1 (full summary) prompt length: {len(summarize_prompt)}")
-        full_summary = (await self._engine.generate(summarize_prompt)).strip()
         if not full_summary:
             print("[Summarizer] Step 1 returned empty, skipping")
             return []
         print(f"[Summarizer] Step 1 done, full_summary length: {len(full_summary)}")
 
         # ─── Step 2: per-issue JSON for Jira ─────────────────────────
-        issues_text = "\n".join(
-            f"- {i['issue_key']}: {i['summary']} ({i['description'] or ''})"
-            for i in issues
-        ) or "无（将所有工作汇总为一条，issue_key 使用 ALL）"
-
+        issues_text = core.format_jira_issues(issues)
         refine_template = await self._get_template(
             "auto_approve_prompt", DEFAULT_AUTO_APPROVE_PROMPT, summary_type=summary_type,
         )
-        refine_prompt = render_prompt(
-            refine_template,
-            date=target_date,
-            jira_issues=issues_text,
-            full_summary=full_summary,
-            git_commits=commits_text,
+        issue_entries = await core.generate_issue_entries(
+            target_date, full_summary, commits_text, issues_text,
+            engine_call, refine_template,
         )
-        print(f"[Summarizer] Step 2 (refine) prompt length: {len(refine_prompt)}")
-        refine_response = await self._engine.generate(refine_prompt)
-        parsed = self._parse_json_array(refine_response)
-        print(f"[Summarizer] Step 2 done, parsed {len(parsed)} issue entries")
+        print(f"[Summarizer] Step 2 done, parsed {len(issue_entries)} issue entries")
 
         # ─── Assemble and persist ────────────────────────────────────
         # Delete stale pending drafts only after confirming we have new content
@@ -107,31 +94,6 @@ class WorklogSummarizer:
             (target_date,),
         )
 
-        # LLM sometimes ignores "同一 issue_key 合并为一条"; enforce in code.
-        merged: dict[str, dict] = {}
-        for item in parsed:
-            try:
-                hours = float(item.get("time_spent_hours", 0))
-            except (TypeError, ValueError):
-                continue
-            key = item.get("issue_key") or ""
-            if not key or key == "OTHER":
-                continue  # Discard unmapped entries — already in full_summary
-            summary_text = (item.get("summary") or "").strip()
-            if key in merged:
-                merged[key]["time_spent_hours"] = round(merged[key]["time_spent_hours"] + hours, 2)
-                if summary_text:
-                    existing = merged[key]["summary"]
-                    merged[key]["summary"] = f"{existing}；{summary_text}" if existing else summary_text
-            else:
-                merged[key] = {
-                    "issue_key": key,
-                    "time_spent_hours": round(hours, 2),
-                    "summary": summary_text,
-                    "jira_worklog_id": None,
-                }
-
-        issue_entries = list(merged.values())
         total_time_sec = int(sum(e["time_spent_hours"] for e in issue_entries) * 3600)
 
         activity_ids = [a["id"] for a in activities]
@@ -171,87 +133,17 @@ class WorklogSummarizer:
         }]
 
     # ─── Helpers ──────────────────────────────────────────────────────
+    # Thin wrappers around summarizer.core — kept on the class only so
+    # existing tests can call them via WorklogSummarizer.__new__().
 
     def _format_commits(self, commits: list[dict]) -> str:
-        if not commits:
-            return "无"
-        return "\n".join(
-            f"- {c['committed_at'][:16]} {c['message']} ({c.get('files_changed', '')})"
-            for c in commits
-        )
+        return core.format_commits(commits)
 
     def _compress_activities(self, activities: list[dict]) -> str:
-        """Compress raw activities into a text summary for LLM prompt.
-
-        Groups by (category, app_name), aggregates duration, keeps window
-        titles. For activity content it prefers llm_summary (dense, ≤100
-        chars, written by ActivitySummarizer) and falls back to raw OCR
-        truncation only when llm_summary is NULL or '(failed)'.
-        """
-        if not activities:
-            return "无"
-
-        from collections import defaultdict
-
-        groups = defaultdict(lambda: {
-            "duration": 0,
-            "titles": set(),
-            "llm_summaries": [],
-            "ocr_fallback": [],
-        })
-        for a in activities:
-            key = (a.get("category", "other"), a.get("app_name", "Unknown"))
-            groups[key]["duration"] += a.get("duration_sec", 0)
-            title = a.get("window_title")
-            if title:
-                groups[key]["titles"].add(title[:60])
-
-            llm_sum = a.get("llm_summary")
-            if llm_sum and llm_sum != "(failed)":
-                # Dedup — several consecutive activities often share the
-                # same app and produce similar summaries; collapse them
-                # so the prompt doesn't repeat.
-                if llm_sum not in groups[key]["llm_summaries"]:
-                    groups[key]["llm_summaries"].append(llm_sum)
-            else:
-                # Fallback: old OCR truncation. Only used when the LLM
-                # worker hasn't reached this row yet or gave up on it.
-                if a.get("signals"):
-                    try:
-                        signals = json.loads(a["signals"])
-                        ocr = (signals.get("ocr_text") or "")[:100]
-                        if ocr and len(groups[key]["ocr_fallback"]) < 3:
-                            groups[key]["ocr_fallback"].append(ocr)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-
-        lines = []
-        for (cat, app), info in sorted(groups.items(), key=lambda x: -x[1]["duration"]):
-            hours = round(info["duration"] / 3600, 1)
-            if hours < 0.1:
-                continue
-            titles = list(info["titles"])[:5]
-            title_str = ", ".join(titles) if titles else ""
-            line = f"- [{cat}] {app} ({hours}h): {title_str}"
-            if info["llm_summaries"]:
-                # Cap at 8 joined summaries so a chatty day doesn't blow
-                # up the step-1 prompt budget.
-                summaries = "；".join(info["llm_summaries"][:8])
-                line += f" | 内容: {summaries}"
-            elif info["ocr_fallback"]:
-                line += f" | OCR: {'; '.join(info['ocr_fallback'][:2])}"
-            lines.append(line)
-
-        return "\n".join(lines) or "无"
+        return core.compress_activities(activities)
 
     def _parse_json_array(self, response: str) -> list[dict]:
-        json_match = re.search(r"\[.*\]", response, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group())
-            except json.JSONDecodeError:
-                pass
-        return []
+        return core.parse_issue_entries(response)
 
     async def _get_template(
         self, setting_key: str, default: str, *, summary_type: str | None = None,

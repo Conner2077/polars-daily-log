@@ -1,0 +1,128 @@
+{
+  "_doc": "Ground-truth dataset for offline eval of the activity → daily-summary pipeline. Each case has explicit input + assertions on what the LLM output must contain (or must NOT contain). Keep this hand-curated and small (≤100 cases) — it's a regression gate, not a benchmark.",
+  "_version": 1,
+  "activities": [
+    {
+      "id": "vscode-debug",
+      "record": {
+        "timestamp": "2026-04-14T10:00:00",
+        "app_name": "Visual Studio Code",
+        "window_title": "main.py — auto_daily_log",
+        "url": "",
+        "signals": {
+          "ocr_text": "def summarize_activity(record): print(record)"
+        }
+      },
+      "prev_summaries": [
+        {
+          "timestamp": "2026-04-14T09:55:00",
+          "app_name": "Visual Studio Code",
+          "llm_summary": "在 VSCode 编辑 main.py，准备调试"
+        }
+      ],
+      "expected": {
+        "must_contain_any_of": ["VSCode", "VS Code", "main.py", "调试", "代码", "编辑"],
+        "must_not_be_failed": true
+      }
+    },
+    {
+      "id": "chrome-jira",
+      "record": {
+        "timestamp": "2026-04-14T11:30:00",
+        "app_name": "Google Chrome",
+        "window_title": "PROJ-101 - Fix SQL parser - Jira",
+        "url": "https://jira.example.com/browse/PROJ-101",
+        "signals": {
+          "tab_title": "PROJ-101 - Fix SQL parser - Jira"
+        }
+      },
+      "prev_summaries": [],
+      "expected": {
+        "must_contain_any_of": ["Jira", "PROJ-101", "任务", "工单", "查看"],
+        "must_not_be_failed": true
+      }
+    },
+    {
+      "id": "wecom-meeting",
+      "record": {
+        "timestamp": "2026-04-14T14:00:00",
+        "app_name": "企业微信",
+        "window_title": "Sprint Planning",
+        "url": "",
+        "signals": {
+          "wecom_group_name": "研发组",
+          "ocr_text": "Sprint Planning - 周二下午会议"
+        }
+      },
+      "prev_summaries": [],
+      "expected": {
+        "must_contain_any_of": ["会议", "Sprint", "研发组", "企业微信", "讨论"],
+        "must_not_be_failed": true
+      }
+    }
+  ],
+  "dailies": [
+    {
+      "id": "mixed-coding-meeting",
+      "date": "2026-04-14",
+      "activities": [
+        {
+          "category": "coding",
+          "app_name": "Visual Studio Code",
+          "window_title": "main.py",
+          "duration_sec": 7200,
+          "llm_summary": "在 VSCode 调试 main.py 的 summarize 函数",
+          "signals": null
+        },
+        {
+          "category": "meeting",
+          "app_name": "企业微信",
+          "window_title": "Sprint Planning",
+          "duration_sec": 1800,
+          "llm_summary": "参加 Sprint Planning 例会",
+          "signals": null
+        },
+        {
+          "category": "browsing",
+          "app_name": "Google Chrome",
+          "window_title": "B 站 - 搞笑视频合集",
+          "duration_sec": 1800,
+          "llm_summary": "浏览 B 站搞笑视频",
+          "signals": null
+        }
+      ],
+      "commits": [
+        {
+          "committed_at": "2026-04-14T15:00:00",
+          "message": "fix: summarize logging",
+          "files_changed": "main.py"
+        }
+      ],
+      "expected": {
+        "must_contain_any_of": ["VSCode", "main.py", "Sprint", "会议"],
+        "should_mention_leisure_or_browsing": true
+      }
+    }
+  ],
+  "issues": [
+    {
+      "id": "filter-leisure-keep-work",
+      "date": "2026-04-14",
+      "full_summary": "## 今日工作\n\n上午在 VSCode 调试 main.py 的 summarize 函数（约 2 小时），下午参加 Sprint Planning 例会（30 分钟）。\n\n## 其他\n\n摸鱼看了 30 分钟 B 站搞笑视频。",
+      "commits_text": "- 2026-04-14T15:00 fix: summarize logging (main.py)",
+      "issues": [
+        {
+          "issue_key": "PROJ-101",
+          "summary": "Fix summarize bug",
+          "description": "summarize 函数在 main.py 出错"
+        }
+      ],
+      "expected": {
+        "must_have_keys": ["PROJ-101"],
+        "must_not_have_keys": ["OTHER", "B站", "搞笑"],
+        "min_total_hours": 2.0,
+        "max_total_hours": 3.0
+      }
+    }
+  ]
+}
