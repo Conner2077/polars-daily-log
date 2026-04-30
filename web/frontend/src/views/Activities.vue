@@ -413,6 +413,8 @@ async function deleteAllForDate() {
 async function retryFailedForDate() {
   if (!selectedDate.value) return
   retryingFailed.value = true
+  // Step 1: hit the retry endpoint. If it fails the whole action is a no-op,
+  // worth showing as an error.
   try {
     const res = await api.retryFailedActivities(selectedDate.value)
     const n = res.data?.count ?? 0
@@ -421,9 +423,26 @@ async function retryFailedForDate() {
     } else {
       ElMessage.info('没有需要重试的失败项')
     }
+  } catch (e) {
+    const detail = e?.response?.data?.detail
+    const status = e?.response?.status
+    const msg = detail
+      ? `重新识别失败：${detail}`
+      : status
+        ? `重新识别失败（HTTP ${status}）：${e.message || ''}`
+        : `重新识别失败：${e?.message || '网络异常或未知错误'}`
+    ElMessage.error(msg)
+    console.error('[retryFailedForDate] retry endpoint failed', e)
+    retryingFailed.value = false
+    return
+  }
+  // Step 2: reload activities. A reload failure shouldn't pretend the retry
+  // failed — show its own toast so the user knows what actually went wrong.
+  try {
     await selectDate(selectedDate.value)
   } catch (e) {
-    ElMessage.error(e.response?.data?.detail || '重新识别失败')
+    ElMessage.warning(`刷新活动列表失败：${e?.message || '请手动刷新'}`)
+    console.error('[retryFailedForDate] reload failed', e)
   } finally {
     retryingFailed.value = false
   }
