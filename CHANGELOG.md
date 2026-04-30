@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.6] — 2026-04-30
+
+补 prompt 回归保护 + 一个 toast 文案 bug。
+
+### Added
+- **Summarizer 离线评估 harness（`auto_daily_log/eval_summarizer.py`）**：把算法层从 DB/scheduler 解耦后，可以拿手工标注的活动样本跑端到端「单条猜测 → 当日 full → 单 issue refine」三阶段，输出 pass/fail。改 `SUMMARIZE_PROMPT` 之前先跑一遍，改完再跑——分降了就回滚。`--mock` 走确定性假引擎，CI 也能用；`--db --engine kimi` 走真引擎；自带一份 `tests/fixtures/eval/baseline.json` 种子数据集，可换。
+
+### Changed
+- **Summarizer 拆纯函数（`summarizer/core.py`）**：activity 单条猜测 / 每日 full summary / per-issue refine 这三段算法从 `activity_summarizer.py` + `summarizer.py` 抽出来，引擎参数改成注入的 `async (prompt) -> str`。`activity_summarizer.py` / `summarizer.py` 现在只做编排（轮询、批量、入库），算法本身可以离线跑、可以打桩。两个老文件合计减了约 200 行。新增 41 个单测覆盖核心逻辑。
+
+### Fixed
+- **「重新识别失败」toast 文案误导**：之前 retry 成功但后续 reload 抛错时，统一显示「重新识别失败」，让用户以为是重试本身坏了。现在 retry 失败才显示该 error toast（带 detail / HTTP status），reload 失败显示独立的 warning「刷新活动列表失败」。两种异常都 `console.error` 完整堆栈方便排查。
+
 ## [0.7.5] — 2026-04-21
 
 补发 0.7.4 漏的两个前端改动 + Jira 头像下载问题。
